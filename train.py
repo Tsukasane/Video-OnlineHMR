@@ -50,7 +50,7 @@ def main(cfg):
     _ = model.load_state_dict(state_dict['state_dict'], strict=False)
 
     model = model.to(cfg.DEVICE)
-    model.frozen_modules = [model.backbone]
+    model.frozen_modules = [model.backbone] # NOTE(yiwen) freeze HMR2.0 backbone
     model.freeze_modules()
 
     logger.info(f'Loaded pretrained checkpoint {checkpoint}')

@@ -24,7 +24,7 @@ class HMR_VIMO(nn.Module):
         self.device = device
         self.cfg = cfg
         self.crop_size = cfg.IMG_RES
-        self.seq_len = 16
+        self.seq_len = cfg.DATASET.SEQ_LEN
 
         # SMPL
         self.smpl = SMPL()      
@@ -63,40 +63,41 @@ class HMR_VIMO(nn.Module):
 
 
     def forward(self, batch, **kwargs):
-        image  = batch['img']
+        image  = batch['img'] # 128, 3, 256, 256
         center = batch['center']
         scale  = batch['scale']
         img_focal = batch['img_focal']
         img_center = batch['img_center']
         bn = len(image)
 
-        # estimate focal length, and bbox
-        bbox_info = self.bbox_est(center, scale, img_focal, img_center)
+        # estimate focal length, and bbox 
+        bbox_info = self.bbox_est(center, scale, img_focal, img_center) # 128, 3
 
         # backbone
         with autocast('cuda'):
-            feature = self.backbone(image[:,:,:,32:-32])
-            feature = feature.float()
+            feature = self.backbone(image[:,:,:,32:-32]) # pass through vit
+            feature = feature.float() # 128, 1280, w=16, h=12 NOTE(yiwen) image feature of each patch/frame
 
         # space-time module
         if self.st_module is not None:
-            bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12)
-            feature = torch.cat([feature, bb], dim=1)
+            bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12) # NOTE(yiwen) update the bbox info for each patch 128, 3, 16, 12
+            feature = torch.cat([feature, bb], dim=1) #128, 1283, 16, 12
 
-            feature = einops.rearrange(feature, '(b t) c h w -> (b h w) t c', t=16)
-            feature = self.st_module(feature)
-            feature = einops.rearrange(feature, '(b h w) t c -> (b t) c h w', h=16, w=12)
+            # NOTE(yiwen) this t is not the real t, but the 
+            feature = einops.rearrange(feature, '(b t) c h w -> (b h w) t c', t=self.seq_len) # ? b=8 h=16 w=12 t=16 c=1283
+
+            feature = self.st_module(feature) # 1536, 16, 1280      t is head num but not the frame num?
+            feature = einops.rearrange(feature, '(b h w) t c -> (b t) c h w', h=16, w=12) # 128, 1280, 16, 12
 
         # smpl_head: transformer + smpl
         pred_pose, pred_shape, pred_cam = self.smpl_head(feature)
         pred_rotmat_0 = rot6d_to_rotmat(pred_pose).reshape(-1, 24, 3, 3)
 
         # smpl motion module
-        if self.motion_module is not None:
-            bb = einops.rearrange(bbox_info, '(b t) c -> b t c', t=16)
-            pred_pose = einops.rearrange(pred_pose, '(b t) c -> b t c', t=16)
-            pred_pose = torch.cat([pred_pose, bb], dim=2)
-
+        if self.motion_module is not None: # NOTE(yiwen) refine the predicted pose
+            bb = einops.rearrange(bbox_info, '(b t) c -> b t c', t=self.seq_len)
+            pred_pose = einops.rearrange(pred_pose, '(b t) c -> b t c', t=self.seq_len)
+            pred_pose = torch.cat([pred_pose, bb], dim=2) # 8, 16, 147
             pred_pose = self.motion_module(pred_pose)
             pred_pose = einops.rearrange(pred_pose, 'b t c -> (b t) c')
 

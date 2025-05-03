@@ -14,6 +14,9 @@ def get_dataloaders(cfg=None):
     valid_set = cfg.DATASET.TEST
     partition = cfg.DATASET.PARTITION
 
+    test_bs = cfg.TEST.BATCH_SIZE
+
+
     print('Num of data loading workers:', num_workers)
     print('Sequence length:', seqlen)
     print('Sequence stride:', stride)
@@ -26,9 +29,10 @@ def get_dataloaders(cfg=None):
                             seqlen=seqlen, stride=stride)
     train_loader = CheckpointDataLoader(train, shuffle=True, batch_size=train_bs, num_workers=num_workers)
 
+    # NOTE(yiwen) ori hard code in test & test_loader
     test = VideoDataset(valid_set, is_train=False, use_augmentation=False, 
-                    normalization=True, cropped=True, crop_size=crop_size, seqlen=16, stride=16)
-    test_loader = DataLoader(test, batch_size=8, shuffle=False, num_workers=num_workers)
+                    normalization=True, cropped=True, crop_size=crop_size, seqlen=seqlen, stride=seqlen) 
+    test_loader = DataLoader(test, batch_size=train_bs, shuffle=False, num_workers=num_workers)
 
     return [train_loader, test_loader]
 

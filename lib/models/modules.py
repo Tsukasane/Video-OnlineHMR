@@ -99,7 +99,58 @@ class temporal_attention(nn.Module):
 
         return x
 
-    
+
+ 
+# TODO(yiwen) check this
+
+class casual_attention(nn.Module):
+    def __init__(self, in_dim=1280, out_dim=1280, hdim=512, nlayer=6, nhead=4, residual=False, causal=True):
+        super(casual_attention, self).__init__()
+        self.hdim = hdim
+        self.out_dim = out_dim
+        self.residual = residual
+        self.causal = causal
+        self.l1 = nn.Linear(in_dim, hdim)
+        self.l2 = nn.Linear(hdim, out_dim)
+
+        self.pos_embedding = PositionalEncoding(hdim, dropout=0.1)
+        TranLayer = nn.TransformerEncoderLayer(
+            d_model=hdim, nhead=nhead, dim_feedforward=1024,
+            dropout=0.1, activation='gelu'
+        )
+        self.trans = nn.TransformerEncoder(TranLayer, num_layers=nlayer)
+        
+        nn.init.xavier_uniform_(self.l1.weight, gain=0.01)
+        nn.init.xavier_uniform_(self.l2.weight, gain=0.01)
+
+    def generate_causal_mask(self, sz):
+        # mask shape: (sz, sz), True means "block"
+        return torch.triu(torch.ones(sz, sz), diagonal=1).bool()
+
+    def forward(self, x):
+        x = x.permute(1, 0, 2)  # (b, t, c) -> (t, b, c)
+
+        h = self.l1(x)
+        h = self.pos_embedding(h)
+
+        if self.causal:
+            seq_len = h.size(0)
+            mask = self.generate_causal_mask(seq_len).to(h.device)
+        else:
+            mask = None
+
+        h = self.trans(h, mask=mask)
+        h = self.l2(h)
+
+        if self.residual:
+            x = x[..., :self.out_dim] + h
+        else:
+            x = h
+
+        x = x.permute(1, 0, 2)  # back to (b, t, c)
+        return x
+
+ 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=100):
         super(PositionalEncoding, self).__init__()

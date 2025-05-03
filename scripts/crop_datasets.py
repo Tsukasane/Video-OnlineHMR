@@ -19,6 +19,7 @@ random.seed(SEED_VALUE)
 torch.manual_seed(SEED_VALUE)
 np.random.seed(SEED_VALUE)
 
+ROOT='/edrive2/yiwenzh5/BEDLAM' #NOTE(yiwen) temp
 # Datasets
 # ds_list = ['3dpw_vid', 'h36m_vid', 'bedlam_vid']
 # ds_list = ['3dpw_vid_test', 'emdb_1']
@@ -35,7 +36,7 @@ for ds in ds_list:
 
     # DATASET
     db = BaseDataset(ds, is_train=True, crop_size=256)
-    loader = DataLoader(db, batch_size=64, num_workers=15, shuffle=False)
+    loader = DataLoader(db, batch_size=64, num_workers=0, shuffle=False)
 
     imgdir = save_dir[ds]
     os.makedirs(imgdir, exist_ok=True)

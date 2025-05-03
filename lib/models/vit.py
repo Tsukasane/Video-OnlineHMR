@@ -54,7 +54,7 @@ def vit_huge():
                 patch_size=16,
                 embed_dim=1280,
                 depth=32,
-                num_heads=16,
+                num_heads=16, # NOTE(yiwen) not the T, but num heads
                 ratio=1,
                 use_checkpoint=False,
                 mlp_ratio=4,
@@ -382,6 +382,9 @@ class ViT(nn.Module):
         return {'pos_embed', 'cls_token'}
 
     def forward_features(self, x):
+        '''
+        Single image as the input.
+        '''
         B, C, H, W = x.shape
         x, (Hp, Wp) = self.patch_embed(x)
 
@@ -396,9 +399,10 @@ class ViT(nn.Module):
             else:
                 x = blk(x)
 
-        x = self.last_norm(x)
+        x = self.last_norm(x) # layer norm 128, 192, 1280
 
-        xp = x.permute(0, 2, 1).reshape(B, -1, Hp, Wp).contiguous()
+        # NOTE(yiwen) they are all transformer so have the same dim
+        xp = x.permute(0, 2, 1).reshape(B, -1, Hp, Wp).contiguous() # 128, 1280, 16, 12
 
         return xp
 

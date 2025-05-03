@@ -6,9 +6,11 @@ SEED_VALUE: 0
 IMG_RES: 256
 
 DATASET:
-  LIST: ['3dpw_vid', 'h36m_vid', 'bedlam_vid']
-  PARTITION: [0.165, 0.165, 0.67]
-  SEQ_LEN: 16
+  LIST: ['3dpw_vid', 'h36m_vid'] # NOTE(yiwen) temp debugging
+  PARTITION: [0.5, 0.5]
+  # LIST: ['3dpw_vid', 'h36m_vid', 'bedlam_vid']
+  # PARTITION: [0.165, 0.165, 0.67]
+  SEQ_LEN: 3
   TEST: 'emdb_1'
 
 LOSS:
@@ -38,6 +40,8 @@ TRAIN:
   OPT: 'AdamW'
   LOSS_SCALE: 1
  
+TEST:
+  BATCH_SIZE: 8
 
 MODEL:
   CHECKPOINT: 'data/pretrain/hmr2b/epoch=35-step=1000000.ckpt'
@@ -49,7 +53,7 @@ MODEL:
   MOTION_NLAYER: 6
 
 
-EXP_NAME: 'tram_0'
+EXP_NAME: 'tram_3f'
 COMMENT:
   'Default configs.'
 

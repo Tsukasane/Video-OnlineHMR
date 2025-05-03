@@ -23,6 +23,8 @@ class Trainer(BaseTrainer):
 
             # Transfer to GPU
             # batch = self.train_loader.batch_normalize_img(batch)
+
+            # b, t --> bt
             batch = {k: v.to(self.device).flatten(0, 1) for k, v in batch.items() if type(v)==torch.Tensor}
             batch['beta_weight'] = self.cfg.TRAIN.SMPL_BETA
             batch['smpl'] = self.model.smpl
@@ -122,7 +124,7 @@ class Trainer(BaseTrainer):
             batch = {k: v.to(self.device).flatten(0, 1) for k, v in batch.items() if type(v)==torch.Tensor}
 
             # gt joints
-            gt_keypoints_3d = batch['pose_3d']
+            gt_keypoints_3d = batch['pose_3d'] # [bt, 24, 4]
 
             # prediction
             with torch.no_grad():

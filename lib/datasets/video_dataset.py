@@ -502,6 +502,8 @@ class VideoDataset(Dataset):
                 indexes_invalid = invalid[group[idx]:group[idx+1]]
 
             chunks = view_as_windows(indexes, (seqlen,), step=stride)
+
+            # print(f'debug -- chunks.shape {chunks.shape}')
             chunks_invalid = view_as_windows(indexes_invalid, (seqlen,), step=stride)
             
             chunks_valid = chunks[chunks_invalid.sum(axis=-1)==0]

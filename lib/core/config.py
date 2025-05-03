@@ -3,6 +3,9 @@ from yacs.config import CfgNode as CN
 from os.path import join
 from data_config import *
 
+'''
+NOTE(yiwen) will be overwritten by ./configs/config_vimo.yaml
+'''
 
 # Configuration variables
 cfg = CN()
@@ -46,8 +49,8 @@ cfg.TRAIN.LR2 = None
 
 cfg.DATASET = CN()
 cfg.DATASET.TEST = 'emdb_1'
-cfg.DATASET.SEQ_LEN = 16
-cfg.DATASET.STRIDE = 16
+cfg.DATASET.SEQ_LEN = 3
+cfg.DATASET.STRIDE = 3
 cfg.DATASET.RESCALE_TO_BEDLAM = 0.25
 
 cfg.MODEL = CN()
