@@ -3,6 +3,8 @@ import einops
 import torch
 import torch.nn as nn
 from .components.pose_transformer import TransformerDecoder
+from .conformer import Conformer
+from .transformer import ShortWindowTransformer
 
 
 class SMPLTransformerDecoderHead(nn.Module):
@@ -66,46 +68,73 @@ class SMPLTransformerDecoderHead(nn.Module):
         return pred_pose, pred_shape, pred_cam
 
 
-class temporal_attention(nn.Module):
+class temporal_attention_sw(nn.Module):
     def __init__(self, in_dim=1280, out_dim=1280, hdim=512, nlayer=6, nhead=4, residual=False):
-        super(temporal_attention, self).__init__()
+        super(temporal_attention_sw, self).__init__()
         self.hdim = hdim
         self.out_dim = out_dim
         self.residual = residual
-        self.l1 = nn.Linear(in_dim, hdim)
+        self.l11 = nn.Linear(in_dim, hdim)
+        self.l12 = nn.Linear(in_dim, hdim)
         self.l2 = nn.Linear(hdim, out_dim)
 
         self.pos_embedding = PositionalEncoding(hdim, dropout=0.1)
+        self.conformer = Conformer(d_model=512, n_heads=1, num_layers=3)
+        self.naive_transfomer = ShortWindowTransformer(d_model=hdim, n_heads=4, num_layers=6)
+
+        self.frame_chunk_size = 1
+        self.expanded_tem_dim = 16
+        self.tem_expansion_layer1 = nn.Linear(self.frame_chunk_size, self.expanded_tem_dim)
+        self.tem_expansion_layer2 = nn.Linear(self.frame_chunk_size, self.expanded_tem_dim)
+        self.tem_conpact_layer = nn.Linear(self.expanded_tem_dim, 3*self.frame_chunk_size)
+
+        self.pos_drop = nn.Dropout(0.15)
+
         TranLayer = nn.TransformerEncoderLayer(d_model=hdim, nhead=nhead, dim_feedforward=1024,
                                                dropout=0.1, activation='gelu')
         self.trans = nn.TransformerEncoder(TranLayer, num_layers=nlayer)
         
-        nn.init.xavier_uniform_(self.l1.weight, gain=0.01)
+        nn.init.xavier_uniform_(self.l11.weight, gain=0.01)
+        nn.init.xavier_uniform_(self.l12.weight, gain=0.01)
         nn.init.xavier_uniform_(self.l2.weight, gain=0.01)
 
     def forward(self, x):
-        x = x.permute(1,0,2)  # (b,t,c) -> (t,b,c)
+        '''
+        Args:
+            - x: (bhw) t c  t=3
+        Returns:
+            - x: (bhw) t c
+        '''
 
-        h = self.l1(x)
-        h = self.pos_embedding(h)
-        h = self.trans(h)
-        h = self.l2(h)
+        # if self.residual==False:
+        #     import pdb
+        #     pdb.set_trace()
+    
+        prev_frame = x[:,0:1,:].permute(0,2,1)
+        curr_frame = x[:,1:2,:].permute(0,2,1)
+        future_frame = x[:,2:3,:]
 
-        if self.residual:
-            x = x[..., :self.out_dim] + h
-        else:
-            x = h
-        x = x.permute(1,0,2)
+        px = self.tem_expansion_layer1(prev_frame).permute(0,2,1) # NOTE(yiwen) hw放在T，不展开T 4608, 16, 1283
+        cx = self.tem_expansion_layer2(curr_frame).permute(0,2,1)
+        # x = x.permute(1,0,2)  # (b,t,c) -> (t,b,c)
+        
+        ph = self.l11(px) # 4608, 16, 512
+        ch = self.l12(cx)
 
+        # TODO(yiwen) check positional encodding after linear
+        ph = self.pos_drop(ph)
+        transformer_output = self.naive_transfomer(ch, ph)
+
+        h = self.l2(transformer_output) # 4608, 16, 1280
+        x = self.tem_conpact_layer(h.permute(0,2,1)).permute(0,2,1) # TODO(yiwen) check  no residual due to x couldn't be fully accessible
+        
         return x
 
 
- 
-# TODO(yiwen) check this
 
-class casual_attention(nn.Module):
-    def __init__(self, in_dim=1280, out_dim=1280, hdim=512, nlayer=6, nhead=4, residual=False, causal=True):
-        super(casual_attention, self).__init__()
+class causal_attention(nn.Module):
+    def __init__(self, in_dim=1280, out_dim=1280, hdim=512, nlayer=6, nhead=4, residual=False, causal=False):
+        super(causal_attention, self).__init__()
         self.hdim = hdim
         self.out_dim = out_dim
         self.residual = residual
@@ -128,6 +157,10 @@ class casual_attention(nn.Module):
         return torch.triu(torch.ones(sz, sz), diagonal=1).bool()
 
     def forward(self, x):
+        '''
+        Args:
+            - x: B, T, 147
+        '''
         x = x.permute(1, 0, 2)  # (b, t, c) -> (t, b, c)
 
         h = self.l1(x)

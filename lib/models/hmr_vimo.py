@@ -36,7 +36,7 @@ class HMR_VIMO(nn.Module):
         if cfg.MODEL.ST_MODULE: 
             hdim = cfg.MODEL.ST_HDIM
             nlayer = cfg.MODEL.ST_NLAYER
-            self.st_module = temporal_attention(in_dim=1280+3, 
+            self.st_module = temporal_attention_sw(in_dim=1280+3, 
                                                 out_dim=1280,
                                                 hdim=hdim,
                                                 nlayer=nlayer,
@@ -48,7 +48,7 @@ class HMR_VIMO(nn.Module):
         if cfg.MODEL.MOTION_MODULE:
             hdim = cfg.MODEL.MOTION_HDIM
             nlayer = cfg.MODEL.MOTION_NLAYER
-            self.motion_module = temporal_attention(in_dim=144+3, 
+            self.motion_module = temporal_attention_sw(in_dim=144+3, 
                                                     out_dim=144,
                                                     hdim=hdim,
                                                     nlayer=nlayer,
@@ -63,11 +63,28 @@ class HMR_VIMO(nn.Module):
 
 
     def forward(self, batch, **kwargs):
-        image  = batch['img'] # 128, 3, 256, 256
-        center = batch['center']
-        scale  = batch['scale']
-        img_focal = batch['img_focal']
-        img_center = batch['img_center']
+        '''
+        Args:
+            - batch (dict)
+                - batch['img'] # B*T, 3, 256, 256
+                - batch['center'] # B*T, 2
+                - batch['scale'] # B*T
+                - batch['img_focal'] # B*T
+                - batch['img_center'] # B*T, 2
+        Returns:
+            - out (dict)
+                - rotmat_preds (list) element shape B*T, 24, 3, 3
+                - shape_preds (list) element shape B*T, 10
+                - cam_preds (list) element shape B*T, 3
+                - j3d_preds (list) element shape B*T, 49, 3
+                - j2d_preds (list) element shape B*T, 49, 2
+                - trans_full (list) element shape B*T, 1, 3
+        '''
+        image  = batch['img'] # B*T, 3, 256, 256
+        center = batch['center'] # B*T, 2
+        scale  = batch['scale'] # B*T
+        img_focal = batch['img_focal'] # B*T
+        img_center = batch['img_center'] # B*T, 2
         bn = len(image)
 
         # estimate focal length, and bbox 
@@ -83,9 +100,9 @@ class HMR_VIMO(nn.Module):
             bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12) # NOTE(yiwen) update the bbox info for each patch 128, 3, 16, 12
             feature = torch.cat([feature, bb], dim=1) #128, 1283, 16, 12
 
-            # NOTE(yiwen) this t is not the real t, but the 
-            feature = einops.rearrange(feature, '(b t) c h w -> (b h w) t c', t=self.seq_len) # ? b=8 h=16 w=12 t=16 c=1283
-
+            # NOTE(yiwen) this t is not the real t, but the b*t
+            feature = einops.rearrange(feature, '(b t) c h w -> (b h w) t c', t=self.seq_len) # b=8 h=16 w=12 t=3 c=1283
+            
             feature = self.st_module(feature) # 1536, 16, 1280      t is head num but not the frame num?
             feature = einops.rearrange(feature, '(b h w) t c -> (b t) c h w', h=16, w=12) # 128, 1280, 16, 12
 
@@ -109,9 +126,9 @@ class HMR_VIMO(nn.Module):
         j2d_preds = []
 
         out = {}
-        out['pred_cam'] = pred_cam
-        out['pred_pose'] = pred_pose
-        out['pred_shape'] = pred_shape
+        out['pred_cam'] = pred_cam # B*T, 3
+        out['pred_pose'] = pred_pose # B*T, 144
+        out['pred_shape'] = pred_shape # B*T, 10
         out['pred_rotmat'] = rot6d_to_rotmat(out['pred_pose']).reshape(-1, 24, 3, 3)
         out['pred_rotmat_0'] = pred_rotmat_0
         
@@ -275,6 +292,9 @@ class HMR_VIMO(nn.Module):
 
 
     def bbox_est(self, center, scale, img_focal, img_center):
+        '''
+        Pixel representation
+        '''
         # Original image center
         img_cx, img_cy = img_center[:,0], img_center[:,1]
 

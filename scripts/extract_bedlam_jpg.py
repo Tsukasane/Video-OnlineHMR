@@ -11,6 +11,8 @@ import ffmpeg
 
 from data_config import ROOT
 
+ROOT='/edrive2/yiwenzh5/BEDLAM' #NOTE(yiwen) temp
+
 def mp4_to_jpg(v, frame_folder):
     cap = cv2.VideoCapture(v)
     count = 0
@@ -33,6 +35,7 @@ def mp4_to_jpg_ffmpeg(v, frame_folder):
         .run(quiet=True)
     )
 
+# NOTE(yiwen) try to unzip the folders one by one
 root = f'{ROOT}/bedlam_30fps'
 mp4_scene = sorted(glob(f'{root}/mp4/*'))
 
@@ -50,5 +53,7 @@ for scene in mp4_scene:
         # mp4_to_jpg(file, img_outdir)
         mp4_to_jpg_ffmpeg(file, img_outdir)
 
-        os.remove(file) # save space
+        # os.remove(file) # save space
 
+    import pdb
+    pdb.set_trace()
