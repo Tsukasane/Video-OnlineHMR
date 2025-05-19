@@ -53,7 +53,7 @@ MODEL:
   MOTION_NLAYER: 6
 
 
-EXP_NAME: 'tram_3f_online'
+EXP_NAME: 'tram_online_v4'
 COMMENT:
   'Default configs.'
 

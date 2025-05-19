@@ -65,8 +65,8 @@ class SMPL(_SMPL):
 
 
     def query(self, hmr_output, default_smpl=False):
-        pred_rotmat = hmr_output['pred_rotmat']
-        pred_shape = hmr_output['pred_shape']
+        pred_rotmat = hmr_output['pred_rotmat'] # 72, 24, 3, 3
+        pred_shape = hmr_output['pred_shape'] # 72, 10
 
         smpl_out = self(global_orient=pred_rotmat[:, [0]],
                         body_pose = pred_rotmat[:, 1:],

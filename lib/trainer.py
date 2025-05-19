@@ -128,11 +128,12 @@ class Trainer(BaseTrainer):
 
             # prediction
             with torch.no_grad():
-                out, _ = model(batch, iters=update_iter)
+                # batch.keys() ['img_idx', 'img_focal', 'img_center', 'img', 'pose', 'betas', 'pose_3d', 'gt_verts', 'keypoints', 'scale', 'center', 'has_smpl', 'has_pose_3d']
+                out, _ = model(batch, iters=update_iter) # 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
                 
                 if '3dpw' in db.dataset:
                     mode = '3dpw'
-                    smpl_out = model.smpl.query(out)
+                    smpl_out = model.smpl.query(out) # input ['pred_rotmat'] ['pred_shape']
                     pred_vertices = smpl_out.vertices
                     J_regressor_batch = J_regressor[None, :].expand(pred_vertices.shape[0], -1, -1)
 
@@ -140,13 +141,13 @@ class Trainer(BaseTrainer):
                     pred_pelvis = pred_keypoints_3d[:, [0],:].clone()
                     pred_keypoints_3d = pred_keypoints_3d - pred_pelvis
 
-                elif 'emdb' in db.dataset:
+                elif 'emdb' in db.dataset: # emdb_1 v
                     mode = 'emdb'
                     smpl_out = model.smpl.query(out, default_smpl=True)
                     pred_keypoints_3d = smpl_out.joints[:, :24]
 
                     pred_pelvis = pred_keypoints_3d[:,[1,2],:].mean(dim=1, keepdim=True).clone()
-                    pred_keypoints_3d = pred_keypoints_3d - pred_pelvis
+                    pred_keypoints_3d = pred_keypoints_3d - pred_pelvis # NOTE(yiwen) only focus on relative motion, not absolute position
                     
 
             # evaluation

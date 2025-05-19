@@ -148,9 +148,13 @@ class Evaluator:
 
     def __call__(self, gt_keypoints_3d, pred_keypoints_3d, dataset='3dpw', 
                 gt_verts=None, pred_verts=None):
-
+        
+        '''
+        Args:
+            - gt_keypoints_3d(tensor): bs * 3, 24, 4
+            - pred_keypoints_3d(tensor): bs * 3, 24, 3
+        '''
         batch_size = gt_keypoints_3d.shape[0] # 128, 24, 4
-
 
         gt_keypoints_3d = gt_keypoints_3d[:, :, :3].detach()
         pred_keypoints_3d = pred_keypoints_3d[:, :, :3].detach()
@@ -159,6 +163,7 @@ class Evaluator:
         gt_valid, pred_valid = self.get_valid_joints(gt_keypoints_3d, 
                                                      pred_keypoints_3d, 
                                                      dataset)
+        # 72, 24, 3
 
         # Compute joint errors
         mpjpe, re = eval_pose(pred_valid, gt_valid)

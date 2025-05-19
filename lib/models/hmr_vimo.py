@@ -40,7 +40,7 @@ class HMR_VIMO(nn.Module):
                                                 out_dim=1280,
                                                 hdim=hdim,
                                                 nlayer=nlayer,
-                                                residual=True)
+                                                is_img=True) # residual=True
         else:
             self.st_module = None
 
@@ -52,7 +52,7 @@ class HMR_VIMO(nn.Module):
                                                     out_dim=144,
                                                     hdim=hdim,
                                                     nlayer=nlayer,
-                                                    residual=False)
+                                                    is_img=False)
         else:
             self.motion_module = None
 
@@ -80,6 +80,8 @@ class HMR_VIMO(nn.Module):
                 - j2d_preds (list) element shape B*T, 49, 2
                 - trans_full (list) element shape B*T, 1, 3
         '''
+
+        # TODO(yiwen) create a new validation pass with sliding window step_size=1
         image  = batch['img'] # B*T, 3, 256, 256
         center = batch['center'] # B*T, 2
         scale  = batch['scale'] # B*T
@@ -92,30 +94,31 @@ class HMR_VIMO(nn.Module):
 
         # backbone
         with autocast('cuda'):
+            # BT, 3, H, W --> BT, C=1280, h, w
             feature = self.backbone(image[:,:,:,32:-32]) # pass through vit
             feature = feature.float() # 128, 1280, w=16, h=12 NOTE(yiwen) image feature of each patch/frame
 
         # space-time module
         if self.st_module is not None:
-            bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12) # NOTE(yiwen) update the bbox info for each patch 128, 3, 16, 12
-            feature = torch.cat([feature, bb], dim=1) #128, 1283, 16, 12
+            bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12)
+            feature = torch.cat([feature, bb], dim=1) #128, 1283, 16, 12 NOTE(yiwen) image + human bbox
 
             # NOTE(yiwen) this t is not the real t, but the b*t
             feature = einops.rearrange(feature, '(b t) c h w -> (b h w) t c', t=self.seq_len) # b=8 h=16 w=12 t=3 c=1283
             
-            feature = self.st_module(feature) # 1536, 16, 1280      t is head num but not the frame num?
+            feature = self.st_module(feature) # 1536, 16, 1280
             feature = einops.rearrange(feature, '(b h w) t c -> (b t) c h w', h=16, w=12) # 128, 1280, 16, 12
 
         # smpl_head: transformer + smpl
-        pred_pose, pred_shape, pred_cam = self.smpl_head(feature)
-        pred_rotmat_0 = rot6d_to_rotmat(pred_pose).reshape(-1, 24, 3, 3)
+        pred_pose, pred_shape, pred_cam = self.smpl_head(feature) # the predicted 6d may not be orthogonal.
+        pred_rotmat_0 = rot6d_to_rotmat(pred_pose).reshape(-1, 24, 3, 3) # 72, 24, 3, 3
 
         # smpl motion module
         if self.motion_module is not None: # NOTE(yiwen) refine the predicted pose
             bb = einops.rearrange(bbox_info, '(b t) c -> b t c', t=self.seq_len)
             pred_pose = einops.rearrange(pred_pose, '(b t) c -> b t c', t=self.seq_len)
-            pred_pose = torch.cat([pred_pose, bb], dim=2) # 8, 16, 147
-            pred_pose = self.motion_module(pred_pose)
+            pred_pose = torch.cat([pred_pose, bb], dim=2) # 24, 3, 147=144+3 pose + bbox
+            pred_pose = self.motion_module(pred_pose) # 24, 3, 144
             pred_pose = einops.rearrange(pred_pose, 'b t c -> (b t) c')
 
         # Predictions

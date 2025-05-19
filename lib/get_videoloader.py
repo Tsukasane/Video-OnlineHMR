@@ -32,7 +32,7 @@ def get_dataloaders(cfg=None):
     # NOTE(yiwen) ori hard code in test & test_loader
     test = VideoDataset(valid_set, is_train=False, use_augmentation=False, 
                     normalization=True, cropped=True, crop_size=crop_size, seqlen=seqlen, stride=seqlen) 
-    test_loader = DataLoader(test, batch_size=train_bs, shuffle=False, num_workers=num_workers)
+    test_loader = DataLoader(test, batch_size=test_bs, shuffle=False, num_workers=num_workers, drop_last=True)
 
     return [train_loader, test_loader]
 
