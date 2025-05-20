@@ -57,9 +57,12 @@ def visualize_tram(seq_folder, floor_scale=2, bin_size=-1, max_faces_per_bin=300
         pred_vert = pred.vertices
         pred_j3d = pred.joints[:, :24]
 
+        switch = world_cam_R[frame].shape[0] - pred_vert.shape[0]
+        frame = frame[:-switch]
+
         cam_r = world_cam_R[frame]
         cam_t = world_cam_T[frame]
-
+        
         pred_vert_w = torch.einsum('bij,bnj->bni', cam_r, pred_vert) + cam_t[:,None]
         pred_j3d_w = torch.einsum('bij,bnj->bni', cam_r, pred_j3d) + cam_t[:,None]
         pred_vert_w, pred_j3d_w = traj_filter(pred_vert_w.cpu(), 

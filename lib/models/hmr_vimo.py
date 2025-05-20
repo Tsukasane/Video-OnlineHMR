@@ -153,6 +153,11 @@ class HMR_VIMO(nn.Module):
     
 
     def inference(self, imgfiles, boxes, img_focal=None, img_center=None, valid=None, frame=None, device='cuda'):
+        '''
+        Args:
+            - imgfiles (List): image paths
+            - 
+        '''
         nfile = len(imgfiles)
         if valid is None:
             valid = np.ones(nfile, dtype=bool)
@@ -162,10 +167,11 @@ class HMR_VIMO(nn.Module):
         if isinstance(imgfiles, list):
             imgfiles = np.array(imgfiles)
 
-        frame = frame[valid]
-        boxes = boxes[valid]
-        frame_chunks, boxes_chunks = parse_chunks(frame, boxes, min_len=16)
+        frame = frame[valid] # (129,)
+        boxes = boxes[valid] # (129, 5)
 
+        frame_chunks, boxes_chunks = parse_chunks(frame, boxes, min_len=3) # NOTE(yiwen) only segment if have missing tracking frames
+        # boxes_chunks[0].shape (129, 5) frame_chunks[0].shape (129,)
         if len(frame_chunks) == 0:
             return
 
@@ -179,6 +185,7 @@ class HMR_VIMO(nn.Module):
         for frame_ck, boxes_ck in zip(frame_chunks, boxes_chunks):
             img_ck = imgfiles[frame_ck]
             results = self.inference_chunk(img_ck, boxes_ck, img_focal=img_focal, img_center=img_center)
+
 
             pred_cam.append(results['pred_cam'])
             pred_pose.append(results['pred_pose'])
@@ -211,36 +218,49 @@ class HMR_VIMO(nn.Module):
         # To-do: efficient implementation with batch
         items = []
         for i in tqdm(range(len(db))):
-            item = db[i]
+
+            item = db[i] # dict
             items.append(item)
 
-            if len(items) < 16:
+            if len(items) < self.seq_len:
                 continue
-            elif len(items) == 16:
+            elif len(items) == self.seq_len:
                 batch = default_collate(items)
-            else:
-                items.pop(0)
-                batch = default_collate(items)
+            else: # len(items) > self.seq_len
+                items.pop(0) # first in first out
+                batch = default_collate(items) # sliding window step=1
 
+            # each batch is a three-frames window
             with torch.no_grad():
                 batch = {k: v.to(device) for k, v in batch.items() if type(v)==torch.Tensor}
-                out, _ = self.forward(batch)
-
-            if len(db) == 16:
-                out = {k:v for k,v in out.items()}
-            elif i == 15:
-                out = {k:v[:9] for k,v in out.items()}
-            elif i == len(db) - 1:
-                out = {k:v[8:] for k,v in out.items()}
-            else:
-                out = {k:v[[8]] for k,v in out.items()}
+                # batch.keys() 'img', 'img_idx', 'scale', 'center', 'img_focal', 'img_center'
                 
+                out, _ = self.forward(batch) 
+                # out.keys() 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
+
+            # NOTE(yiwen) we only use the estimation of current frame
+            out = {k:v[1:-1] for k,v in out.items()}
+            # if len(db) == 16: # video has three frames
+            #     out = {k:v for k,v in out.items()} 
+            # elif i == 15:
+            #     out = {k:v[:9] for k,v in out.items()} # if less than one window
+            # elif i == len(db) - 1:
+            #     out = {k:v[8:] for k,v in out.items()} # the later 8 frames
+            # else:
+            #     out = {k:v[[8]] for k,v in out.items()}
+
             pred_cam.append(out['pred_cam'].cpu())
             pred_pose.append(out['pred_pose'].cpu())
             pred_shape.append(out['pred_shape'].cpu())
             pred_rotmat.append(out['pred_rotmat'].cpu())
             pred_trans.append(out['trans_full'].cpu())
 
+            if i==0: # padding the first and the last, since sliding window cannot process the first and last frame of a sequence
+                pred_cam.append(out['pred_cam'].cpu())
+                pred_pose.append(out['pred_pose'].cpu())
+                pred_shape.append(out['pred_shape'].cpu())
+                pred_rotmat.append(out['pred_rotmat'].cpu())
+                pred_trans.append(out['trans_full'].cpu())
 
         results = {'pred_cam': torch.cat(pred_cam),
                 'pred_pose': torch.cat(pred_pose),

@@ -16,6 +16,21 @@
 * TRAM 原本的validation sliding window 也是切好，没有重叠，因为最后estimate出来的结果直接“加”在init condition上，不像WHAM把init condition当成nn输入的一部分; "For human trajectory evaluation, we slice a sequence into 100-frame segments and evaluate 3D joint error after aligning the first two frames (W-MPJPE100) or the entire segment (WA-MPJPE100)."
 
 
+## Run demo on videos
+This project integrates the complete 4D human system, including tracking, slam, and 4D human capture in the world space. We separate the core functionalities into different scripts, which should be run **sequentially**. Each step will save its result to be used by the next step. All results will be saved in a folder with the same name as the video.
+
+```bash
+# 1. Run Masked Droid SLAM (also detect+track humans in this step)
+python scripts/estimate_camera.py --video "./example_video000088.mp4"
+# -- You can indicate if the camera is static. The algorithm will try to catch it as well.
+python scripts/estimate_camera.py --video "./another_video.mov" --static_camera
+
+# 2. Run 4D human capture with VIMO.
+python scripts/estimate_humans.py --video "./example_video000088.mp4"
+
+# 3. Put everything together. Render the output video.
+python scripts/visualize_tram.py --video "./example_video000088.mp4"
+```
 
 
 ```

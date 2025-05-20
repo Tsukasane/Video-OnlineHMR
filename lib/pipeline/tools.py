@@ -182,9 +182,9 @@ def parse_chunks(frame, boxes, min_len=16):
      """
     frame_chunks = []
     boxes_chunks = []
-    step = frame[1:] - frame[:-1]
+    step = frame[1:] - frame[:-1] # interval between adjacent frame indexes
     step = np.concatenate([[0], step])
-    breaks = np.where(step != 1)[0]
+    breaks = np.where(step != 1)[0] # NOTE(yiwen) lose tracking
 
     start = 0
     for bk in breaks:

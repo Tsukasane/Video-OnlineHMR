@@ -91,11 +91,13 @@ class temporal_attention_sw(nn.Module):
         self.compacted_spa_idim = 16
         self.tem_expansion_layer = nn.Linear(self.frame_chunk_size, self.expanded_tem_idim)
         self.tem_compact_layer = nn.Linear(self.expanded_tem_idim, 3*self.frame_chunk_size)
-        # self.spa_compact_layer1 = nn.Linear(192, self.compacted_spa_idim)
-        # self.spa_compact_layer2 = nn.Linear(192, self.compacted_spa_idim)
+        self.spa_compact_layer1 = nn.Linear(192, self.compacted_spa_idim)
+        self.spa_compact_layer2 = nn.Linear(192, self.compacted_spa_idim)
 
         self.spa_pooling_layer = nn.AdaptiveAvgPool2d(output_size=(self.out_h, self.out_w))
-        self.spa_expansion_layer = nn.Linear(self.out_h*self.out_w, 192)
+
+        self.spa_expansion_layer = nn.Linear(self.compacted_spa_idim, 192) #v3
+        # self.spa_expansion_layer = nn.Linear(self.out_h*self.out_w, 192) #v4
 
         # motion
         self.expanded_tem_mdim = 16
@@ -150,16 +152,16 @@ class temporal_attention_sw(nn.Module):
             curr_frame = x[:,1:2,:].reshape(-1, hw, x.shape[-1]) # 8, 192, 1283 TODO(yiwen) large T
             future_frame = x[:,2:3,:]
 
-            # prev_frame = self.spa_compact_layer1(prev_frame.permute(0,2,1)).permute(0,2,1)
-            # curr_frame = self.spa_compact_layer2(curr_frame.permute(0,2,1)).permute(0,2,1)
+            prev_frame = self.spa_compact_layer1(prev_frame.permute(0,2,1)).permute(0,2,1)
+            curr_frame = self.spa_compact_layer2(curr_frame.permute(0,2,1)).permute(0,2,1)
             
             # v4 192 --> 12
-            B, _, D = curr_frame.shape
-            prev_frame = prev_frame.permute(0,2,1).reshape(B, D, 16, 12)
-            prev_frame = self.spa_pooling_layer(prev_frame).reshape(B, D, -1).permute(0,2,1)
+            # B, _, D = curr_frame.shape
+            # prev_frame = prev_frame.permute(0,2,1).reshape(B, D, 16, 12)
+            # prev_frame = self.spa_pooling_layer(prev_frame).reshape(B, D, -1).permute(0,2,1)
 
-            curr_frame = curr_frame.permute(0,2,1).reshape(B, D, 16, 12)
-            curr_frame = self.spa_pooling_layer(curr_frame).reshape(B, D, -1).permute(0,2,1)
+            # curr_frame = curr_frame.permute(0,2,1).reshape(B, D, 16, 12)
+            # curr_frame = self.spa_pooling_layer(curr_frame).reshape(B, D, -1).permute(0,2,1)
 
             ph = self.l11(prev_frame) # 24, 192, 512
             ch = self.l12(curr_frame)

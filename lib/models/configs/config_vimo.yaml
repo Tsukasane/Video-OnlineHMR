@@ -8,7 +8,7 @@ IMG_RES: 256
 DATASET:
   LIST: ['3dpw_vid', 'h36m', 'bedlam_vid']
   PARTITION: [0.165, 0.165, 0.67]
-  SEQ_LEN: 16
+  SEQ_LEN: 3
   TEST: 'emdb_1'
 
 LOSS:

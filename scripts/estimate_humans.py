@@ -42,12 +42,12 @@ tracks = [tracks[tid[r]] for r in rank]
 
 ##### Run HPS (here we use tram) #####
 print('Estimate HPS ...')
-model = get_hmr_vimo(checkpoint='data/pretrain/vimo_checkpoint.pth.tar')
+model = get_hmr_vimo(checkpoint='/home/yiwenzh5/onlineHMR_t/results/tram_online_v3/checkpoint_best.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
 
 for k, trk in enumerate(tracks):
     valid = np.array([t['det'] for t in trk])
     boxes = np.concatenate([t['det_box'] for t in trk])
-    frame = np.array([t['frame'] for t in trk])
+    frame = np.array([t['frame'] for t in trk]) # (129,)
     results = model.inference(imgfiles, boxes, valid=valid, frame=frame,
                               img_focal=img_focal, img_center=img_center)
     
