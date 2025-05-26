@@ -9,6 +9,12 @@ from typing import Optional, Dict, List, Tuple
 from lib.core import constants
 
 
+def select_valid(batch_tensor, valid_range):
+    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[0]+1]
+    batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
+
+    return batch_tensor
+
 def compute_error_accel(joints_gt, joints_pred, vis=None):
     """
     Computes acceleration error:
@@ -145,6 +151,9 @@ class Evaluator:
         self.H36M_TO_J14 = constants.H36M_TO_J14
         self.all_acc = []
 
+        self.valid_range = (1,1)
+        self.chunk_size = 16
+
 
     def __call__(self, gt_keypoints_3d, pred_keypoints_3d, dataset='3dpw', 
                 gt_verts=None, pred_verts=None):
@@ -154,7 +163,7 @@ class Evaluator:
             - gt_keypoints_3d(tensor): bs * 3, 24, 4
             - pred_keypoints_3d(tensor): bs * 3, 24, 3
         '''
-        batch_size = gt_keypoints_3d.shape[0] # 128, 24, 4
+        # batch_size = gt_keypoints_3d.shape[0] # 128, 24, 4
 
         gt_keypoints_3d = gt_keypoints_3d[:, :, :3].detach()
         pred_keypoints_3d = pred_keypoints_3d[:, :, :3].detach()
@@ -163,8 +172,11 @@ class Evaluator:
         gt_valid, pred_valid = self.get_valid_joints(gt_keypoints_3d, 
                                                      pred_keypoints_3d, 
                                                      dataset)
-        # 72, 24, 3
-
+        # 48, 24, 3 --> 16, 24, 3
+        gt_valid = select_valid(gt_valid, self.valid_range)
+        pred_valid = select_valid(pred_valid, self.valid_range)
+        
+        batch_size = gt_valid.shape[0]
         # Compute joint errors
         mpjpe, re = eval_pose(pred_valid, gt_valid)
 
@@ -176,12 +188,12 @@ class Evaluator:
             self.pve[self.counter:self.counter+batch_size] = pve * 1000
 
         if self.seq_len is not None:
-            gt = gt_keypoints_3d.reshape(-1, self.seq_len, num_j, 3).cpu()
-            pred = pred_keypoints_3d.reshape(-1, self.seq_len, num_j, 3).cpu()
-            acc = 0
+            gt = gt_keypoints_3d.reshape(-1, self.chunk_size, num_j, 3).cpu()
+            pred = pred_keypoints_3d.reshape(-1, self.chunk_size, num_j, 3).cpu()
+            acc = 0 # NOTE(yiwen) originally calculate the acc error in each window
+
             for i in range(len(gt)):
                 acc += compute_error_accel(gt[i], pred[i]).mean() / len(gt)
-            
             self.acc[self.counter:self.counter+batch_size] = acc * 1000 #(30**2)
             
         self.counter += batch_size

@@ -41,7 +41,7 @@ TRAIN:
   LOSS_SCALE: 1
  
 TEST:
-  BATCH_SIZE: 8
+  BATCH_SIZE: 48
 
 MODEL:
   CHECKPOINT: 'data/pretrain/hmr2b/epoch=35-step=1000000.ckpt'
@@ -53,7 +53,7 @@ MODEL:
   MOTION_NLAYER: 6
 
 
-EXP_NAME: 'tram_online_v4'
+EXP_NAME: 'tram_curr1' # shorter temporal expansion dims
 COMMENT:
   'Default configs.'
 

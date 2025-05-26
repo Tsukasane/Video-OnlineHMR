@@ -17,6 +17,13 @@ from ..pipeline.tools import parse_chunks
 autocast = torch.amp.autocast
 
 
+def select_valid(batch_tensor, valid_range):
+    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[0]+1]
+    batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
+
+    return batch_tensor
+
+
 class HMR_VIMO(nn.Module):
     def __init__(self, cfg=None, device='cpu', **kwargs):
 
@@ -36,6 +43,13 @@ class HMR_VIMO(nn.Module):
         if cfg.MODEL.ST_MODULE: 
             hdim = cfg.MODEL.ST_HDIM
             nlayer = cfg.MODEL.ST_NLAYER
+
+            # self.st_module = temporal_attention(in_dim=1280+3, 
+            #                                     out_dim=1280,
+            #                                     hdim=hdim,
+            #                                     nlayer=nlayer,
+            #                                     residual=True)
+            # online
             self.st_module = temporal_attention_sw(in_dim=1280+3, 
                                                 out_dim=1280,
                                                 hdim=hdim,
@@ -48,11 +62,20 @@ class HMR_VIMO(nn.Module):
         if cfg.MODEL.MOTION_MODULE:
             hdim = cfg.MODEL.MOTION_HDIM
             nlayer = cfg.MODEL.MOTION_NLAYER
+
+            # online
             self.motion_module = temporal_attention_sw(in_dim=144+3, 
                                                     out_dim=144,
                                                     hdim=hdim,
                                                     nlayer=nlayer,
                                                     is_img=False)
+            
+            # tram
+            # self.motion_module = temporal_attention(in_dim=144+3, 
+            #                                         out_dim=144,
+            #                                         hdim=hdim,
+            #                                         nlayer=nlayer,
+            #                                         residual=False)
         else:
             self.motion_module = None
 
@@ -87,7 +110,8 @@ class HMR_VIMO(nn.Module):
         scale  = batch['scale'] # B*T
         img_focal = batch['img_focal'] # B*T
         img_center = batch['img_center'] # B*T, 2
-        bn = len(image)
+        
+        valid_range = (1,1)
 
         # estimate focal length, and bbox 
         bbox_info = self.bbox_est(center, scale, img_focal, img_center) # 128, 3
@@ -111,7 +135,10 @@ class HMR_VIMO(nn.Module):
 
         # smpl_head: transformer + smpl
         pred_pose, pred_shape, pred_cam = self.smpl_head(feature) # the predicted 6d may not be orthogonal.
-        pred_rotmat_0 = rot6d_to_rotmat(pred_pose).reshape(-1, 24, 3, 3) # 72, 24, 3, 3
+
+        pred_shape = select_valid(pred_shape, valid_range)
+        pred_cam = select_valid(pred_cam, valid_range)
+        pred_rotmat_0 = rot6d_to_rotmat(select_valid(pred_pose, valid_range)).reshape(-1, 24, 3, 3) # 72, 24, 3, 3
 
         # smpl motion module
         if self.motion_module is not None: # NOTE(yiwen) refine the predicted pose
@@ -119,7 +146,7 @@ class HMR_VIMO(nn.Module):
             pred_pose = einops.rearrange(pred_pose, '(b t) c -> b t c', t=self.seq_len)
             pred_pose = torch.cat([pred_pose, bb], dim=2) # 24, 3, 147=144+3 pose + bbox
             pred_pose = self.motion_module(pred_pose) # 24, 3, 144
-            pred_pose = einops.rearrange(pred_pose, 'b t c -> (b t) c')
+            pred_pose = einops.rearrange(pred_pose, 'b t c -> (b t) c', t=(valid_range[1]-valid_range[0]+1))
 
         # Predictions
         rotmat_preds  = [] 
@@ -137,7 +164,11 @@ class HMR_VIMO(nn.Module):
         
         s_out = self.smpl.query(out)
         j3d = s_out.joints
-        j2d = self.project(j3d, out['pred_cam'], center, scale, img_focal, img_center)
+        j2d = self.project(j3d, out['pred_cam'], 
+                           select_valid(center, valid_range), 
+                           select_valid(scale, valid_range), 
+                           select_valid(img_focal, valid_range),
+                           select_valid(img_center, valid_range))
 
         rotmat_preds.append(out['pred_rotmat'].clone())
         shape_preds.append(out['pred_shape'].clone())
@@ -146,7 +177,12 @@ class HMR_VIMO(nn.Module):
         j2d_preds.append(j2d.clone())
         iter_preds = [rotmat_preds, shape_preds, cam_preds, j3d_preds, j2d_preds]
 
-        trans_full = self.get_trans(out['pred_cam'], center, scale, img_focal, img_center)
+        trans_full = self.get_trans(out['pred_cam'], 
+                                        select_valid(center, valid_range), 
+                                        select_valid(scale, valid_range), 
+                                        select_valid(img_focal, valid_range),
+                                        select_valid(img_center, valid_range))
+
         out['trans_full'] = trans_full
         
         return out, iter_preds

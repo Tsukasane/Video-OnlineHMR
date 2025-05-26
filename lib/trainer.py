@@ -6,6 +6,11 @@ from lib.utils.pose_utils import Evaluator
 
 logger = logging.getLogger(__name__)
 
+def select_valid(batch_tensor, valid_range):
+    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[0]+1]
+    batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
+
+    return batch_tensor
 
 class Trainer(BaseTrainer):
 
@@ -17,6 +22,8 @@ class Trainer(BaseTrainer):
         self.model.freeze_modules()
         update_iter = self.cfg.TRAIN.UPDATE_ITER
         crop_size = self.model.crop_size
+
+        valid_range = (1,1) # prev 0, curr 1, future 2
 
 
         for i, batch in enumerate(tqdm(self.train_loader, desc="Computing batch")):
@@ -32,7 +39,7 @@ class Trainer(BaseTrainer):
             # Forward pass
             out, iter_preds = self.model(batch, iters=update_iter)
             try:
-                batch['pred_rotmat_0'] = out['pred_rotmat_0']
+                batch['pred_rotmat_0'] = out['pred_rotmat_0'] # 72, 24, 3, 3
             except Exception:
                 batch['pred_rotmat_0'] = None
 
@@ -42,14 +49,15 @@ class Trainer(BaseTrainer):
             
             gamma = self.cfg.TRAIN.GAMMA
             loss = 0
-            for j in range(N):
-                batch['pred_rotmat'] = rotmat_preds[j]
-                batch['pred_betas'] = shape_preds[j]
-                batch['pred_cam'] = cam_preds[j]
-                batch['pred_keypoints_3d'] = j3d_preds[j]
-                batch['pred_keypoints_2d'] = (j2d_preds[j]-crop_size/2.) / (crop_size/2.) 
 
-                loss_j, losses = self.criterion(batch)
+            for j in range(N):
+                batch['pred_rotmat'] = rotmat_preds[j] # B*T=72, 24, 3, 3
+                batch['pred_betas'] = shape_preds[j] # 72, 10
+                batch['pred_cam'] = cam_preds[j] # 72, 3
+                batch['pred_keypoints_3d'] = j3d_preds[j] # 72, 49, 3
+                batch['pred_keypoints_2d'] = (j2d_preds[j]-crop_size/2.) / (crop_size/2.) # 72, 49, 2
+                
+                loss_j, losses = self.criterion(batch, valid_range)
                 loss += gamma**(N-j-1) * loss_j
                 
             loss *= self.cfg.TRAIN.LOSS_SCALE
@@ -115,8 +123,11 @@ class Trainer(BaseTrainer):
         device = self.device
         db = loader.dataset
 
+        valid_range = (1,1)
+        # evaluator = Evaluator(dataset_length=len(db.imgname),
+        #                       seq_len=getattr(model, 'seq_len', None))
         evaluator = Evaluator(dataset_length=len(db.imgname),
-                              seq_len=getattr(model, 'seq_len', None))
+                              seq_len=valid_range[1]-valid_range[0]+1)
         J_regressor = db.J_regressor.to(device)
 
         for i, batch in enumerate(loader):
@@ -149,8 +160,8 @@ class Trainer(BaseTrainer):
                     pred_pelvis = pred_keypoints_3d[:,[1,2],:].mean(dim=1, keepdim=True).clone()
                     pred_keypoints_3d = pred_keypoints_3d - pred_pelvis # NOTE(yiwen) only focus on relative motion, not absolute position
                     
-
             # evaluation
+            gt_keypoints_3d = select_valid(gt_keypoints_3d, valid_range)
             evaluator(gt_keypoints_3d, pred_keypoints_3d, mode)
 
 

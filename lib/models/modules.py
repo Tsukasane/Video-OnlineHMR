@@ -96,14 +96,15 @@ class temporal_attention_sw(nn.Module):
 
         self.spa_pooling_layer = nn.AdaptiveAvgPool2d(output_size=(self.out_h, self.out_w))
 
-        self.spa_expansion_layer = nn.Linear(self.compacted_spa_idim, 192) #v3
-        # self.spa_expansion_layer = nn.Linear(self.out_h*self.out_w, 192) #v4
+        # self.spa_expansion_layer = nn.Linear(self.compacted_spa_idim, 192) #v3
+        self.spa_expansion_layer = nn.Linear(self.out_h*self.out_w, 192) #v4
 
         # motion
-        self.expanded_tem_mdim = 16
+        self.expanded_tem_mdim = 24 # 16
         self.tem_expansion_layer1 = nn.Linear(self.frame_chunk_size, self.expanded_tem_mdim)
         self.tem_expansion_layer2 = nn.Linear(self.frame_chunk_size, self.expanded_tem_mdim)
         self.tem_compact_layer1 = nn.Linear(self.expanded_tem_mdim, 3*self.frame_chunk_size)
+        self.tem_compact_layer2 = nn.Linear(self.expanded_tem_mdim, 1)
 
 
         self.pos_drop = nn.Dropout(0.15)
@@ -142,42 +143,94 @@ class temporal_attention_sw(nn.Module):
             transformer_output = self.naive_transfomer(ch, ph)
 
             h = self.l2(transformer_output) # 4608, 16, 1280
-            out = self.tem_compact_layer1(h.permute(0,2,1)).permute(0,2,1) # TODO(yiwen) check no residual due to x couldn't be fully accessible
-            
-        else: # for image feature
-            hw = 192 # NOTE(yiwen) need to update each time when updating bs
+            out = self.tem_compact_layer2(h.permute(0,2,1)).permute(0,2,1) # NOTE(yiwen) only the current
 
-            # v3 192 --> 16
-            prev_frame = x[:,0:1,:].reshape(-1, hw, x.shape[-1]) # 8, 192, 1283 TODO(yiwen) large T
-            curr_frame = x[:,1:2,:].reshape(-1, hw, x.shape[-1]) # 8, 192, 1283 TODO(yiwen) large T
+        else: # for img feature
+            prev_frame = x[:,0:1,:].permute(0,2,1)
+            curr_frame = x[:,1:2,:].permute(0,2,1)
             future_frame = x[:,2:3,:]
 
-            prev_frame = self.spa_compact_layer1(prev_frame.permute(0,2,1)).permute(0,2,1)
-            curr_frame = self.spa_compact_layer2(curr_frame.permute(0,2,1)).permute(0,2,1)
+            px = self.tem_expansion_layer1(prev_frame).permute(0,2,1)
+            cx = self.tem_expansion_layer2(curr_frame).permute(0,2,1)
+            # x = x.permute(1,0,2)  # (b,t,c) -> (t,b,c)
             
-            # v4 192 --> 12
-            # B, _, D = curr_frame.shape
-            # prev_frame = prev_frame.permute(0,2,1).reshape(B, D, 16, 12)
-            # prev_frame = self.spa_pooling_layer(prev_frame).reshape(B, D, -1).permute(0,2,1)
+            ph = self.l11(px) # 4608, 16, 512
+            ch = self.l12(cx)
 
-            # curr_frame = curr_frame.permute(0,2,1).reshape(B, D, 16, 12)
-            # curr_frame = self.spa_pooling_layer(curr_frame).reshape(B, D, -1).permute(0,2,1)
-
-            ph = self.l11(prev_frame) # 24, 192, 512
-            ch = self.l12(curr_frame)
-            
             # TODO(yiwen) check positional encodding after linear
             ph = self.pos_drop(ph)
             transformer_output = self.naive_transfomer(ch, ph)
 
-            transformer_output = self.spa_expansion_layer(transformer_output.permute(0,2,1)).permute(0,2,1)
-            h = self.l2(transformer_output) # 24, 16, 1280
+            h = self.l2(transformer_output) # 4608, 16, 1280
+            out = self.tem_compact_layer1(h.permute(0,2,1)).permute(0,2,1)         
+        
+        # else: # for image feature
+        #     hw = 192 # NOTE(yiwen) need to update each time when updating bs
 
-            curr_rp = h.reshape(-1, self.frame_chunk_size, h.shape[-1]) # 4608, 1, 1280 NOTE(yiwen) a representation for current h
-            out = self.tem_expansion_layer(curr_rp.permute(0,2,1)).permute(0,2,1) # 384, 3, 1280
+        #     # v3 192 --> 16
+        #     prev_frame = x[:,0:1,:].reshape(-1, hw, x.shape[-1]) # 8, 192, 1283
+        #     curr_frame = x[:,1:2,:].reshape(-1, hw, x.shape[-1]) # 8, 192, 1283
+        #     future_frame = x[:,2:3,:]
+
+        #     # prev_frame = self.spa_compact_layer1(prev_frame.permute(0,2,1)).permute(0,2,1)
+        #     # curr_frame = self.spa_compact_layer2(curr_frame.permute(0,2,1)).permute(0,2,1)
+            
+        #     # v4 192 --> 12
+        #     B, _, D = curr_frame.shape
+        #     prev_frame = prev_frame.permute(0,2,1).reshape(B, D, 16, 12)
+        #     prev_frame = self.spa_pooling_layer(prev_frame).reshape(B, D, -1).permute(0,2,1)
+
+        #     curr_frame = curr_frame.permute(0,2,1).reshape(B, D, 16, 12)
+        #     curr_frame = self.spa_pooling_layer(curr_frame).reshape(B, D, -1).permute(0,2,1)
+
+        #     ph = self.l11(prev_frame) # 24, 192, 512
+        #     ch = self.l12(curr_frame)
+            
+        #     # TODO(yiwen) check positional encodding after linear
+        #     ph = self.pos_drop(ph)
+        #     transformer_output = self.naive_transfomer(ch, ph)
+
+        #     transformer_output = self.spa_expansion_layer(transformer_output.permute(0,2,1)).permute(0,2,1)
+        #     h = self.l2(transformer_output) # 24, 16, 1280
+
+        #     curr_rp = h.reshape(-1, self.frame_chunk_size, h.shape[-1]) # 4608, 1, 1280 NOTE(yiwen) a representation for current h
+        #     out = self.tem_expansion_layer(curr_rp.permute(0,2,1)).permute(0,2,1) # 384, 3, 1280
         
         return out
 
+
+class temporal_attention(nn.Module):
+    def __init__(self, in_dim=1280, out_dim=1280, hdim=512, nlayer=6, nhead=4, residual=False):
+        super(temporal_attention, self).__init__()
+        self.hdim = hdim
+        self.out_dim = out_dim
+        self.residual = residual
+        self.l1 = nn.Linear(in_dim, hdim)
+        self.l2 = nn.Linear(hdim, out_dim)
+
+        self.pos_embedding = PositionalEncoding(hdim, dropout=0.1)
+        TranLayer = nn.TransformerEncoderLayer(d_model=hdim, nhead=nhead, dim_feedforward=1024,
+                                               dropout=0.1, activation='gelu')
+        self.trans = nn.TransformerEncoder(TranLayer, num_layers=nlayer)
+
+        nn.init.xavier_uniform_(self.l1.weight, gain=0.01)
+        nn.init.xavier_uniform_(self.l2.weight, gain=0.01)
+
+    def forward(self, x):
+        x = x.permute(1,0,2)  # (b,t,c) -> (t,b,c)
+
+        h = self.l1(x)
+        h = self.pos_embedding(h)
+        h = self.trans(h)
+        h = self.l2(h)
+
+        if self.residual:
+            x = x[..., :self.out_dim] + h
+        else:
+            x = h
+        x = x.permute(1,0,2)
+
+        return x
 
 
 class causal_attention(nn.Module):

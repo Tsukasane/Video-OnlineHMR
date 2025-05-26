@@ -151,14 +151,14 @@ class VideoDataset(Dataset):
         # Video
         self.seqlen = seqlen
         self.stride = stride
-
         if 'coco' not in self.dataset:
             self.seq_idx, self.group = self.split_into_chunks(self.seqname, seqlen, stride=stride)
 
             if (not is_train) and subset:
-                np.random.seed(0)
-                self.seq_idx = np.random.permutation(self.seq_idx)
-                self.seq_idx = self.seq_idx[:300].tolist()
+                # np.random.seed(0)
+                # self.seq_idx = np.random.permutation(self.seq_idx) # NOTE(yiwen) no suffle to cal accel
+                # self.seq_idx = self.seq_idx[:300].tolist()
+                self.seq_idx = self.seq_idx[:300]
                 print(f'Using a subset of {self.dataset}')
 
             seqs = []
@@ -501,10 +501,12 @@ class VideoDataset(Dataset):
             else:
                 indexes_invalid = invalid[group[idx]:group[idx+1]]
 
-            chunks = view_as_windows(indexes, (seqlen,), step=stride)
-
-            # print(f'debug -- chunks.shape {chunks.shape}')
-            chunks_invalid = view_as_windows(indexes_invalid, (seqlen,), step=stride)
+            if self.is_train:
+                chunks = view_as_windows(indexes, (seqlen,), step=stride)
+                chunks_invalid = view_as_windows(indexes_invalid, (seqlen,), step=stride)
+            else: # NOTE(yiwen) iftest, each window len=3, step=1, total length=seqlen-2
+                chunks = view_as_windows(indexes, (seqlen,), step=1)
+                chunks_invalid = view_as_windows(indexes_invalid, (seqlen,), step=1)
             
             chunks_valid = chunks[chunks_invalid.sum(axis=-1)==0]
             
