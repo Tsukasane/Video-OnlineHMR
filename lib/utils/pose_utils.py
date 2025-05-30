@@ -10,7 +10,7 @@ from lib.core import constants
 
 
 def select_valid(batch_tensor, valid_range):
-    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[0]+1]
+    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[1]+1]
     batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
 
     return batch_tensor
@@ -173,8 +173,8 @@ class Evaluator:
                                                      pred_keypoints_3d, 
                                                      dataset)
         # 48, 24, 3 --> 16, 24, 3
-        gt_valid = select_valid(gt_valid, self.valid_range)
-        pred_valid = select_valid(pred_valid, self.valid_range)
+        # gt_valid = select_valid(gt_valid, self.valid_range)
+        # pred_valid = select_valid(pred_valid, self.valid_range)
         
         batch_size = gt_valid.shape[0]
         # Compute joint errors
@@ -188,7 +188,8 @@ class Evaluator:
             self.pve[self.counter:self.counter+batch_size] = pve * 1000
 
         if self.seq_len is not None:
-            gt = gt_keypoints_3d.reshape(-1, self.chunk_size, num_j, 3).cpu()
+            # NOTE(yiwen) if prev+curr, then avg(prev 16 accel, curr 16 accel)
+            gt = gt_keypoints_3d.reshape(-1, self.chunk_size, num_j, 3).cpu() # 2, 16, 24, 3
             pred = pred_keypoints_3d.reshape(-1, self.chunk_size, num_j, 3).cpu()
             acc = 0 # NOTE(yiwen) originally calculate the acc error in each window
 

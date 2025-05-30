@@ -7,7 +7,7 @@ from lib.utils.pose_utils import Evaluator
 logger = logging.getLogger(__name__)
 
 def select_valid(batch_tensor, valid_range):
-    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[0]+1]
+    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[1]+1]
     batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
 
     return batch_tensor
@@ -23,8 +23,7 @@ class Trainer(BaseTrainer):
         update_iter = self.cfg.TRAIN.UPDATE_ITER
         crop_size = self.model.crop_size
 
-        valid_range = (1,1) # prev 0, curr 1, future 2
-
+        self.valid_range = self.cfg.MODEL.VALID_RANGE # prev 0, curr 1, future 2
 
         for i, batch in enumerate(tqdm(self.train_loader, desc="Computing batch")):
 
@@ -37,7 +36,7 @@ class Trainer(BaseTrainer):
             batch['smpl'] = self.model.smpl
 
             # Forward pass
-            out, iter_preds = self.model(batch, iters=update_iter)
+            out, iter_preds = self.model(batch, self.valid_range, iters=update_iter)
             try:
                 batch['pred_rotmat_0'] = out['pred_rotmat_0'] # 72, 24, 3, 3
             except Exception:
@@ -57,7 +56,7 @@ class Trainer(BaseTrainer):
                 batch['pred_keypoints_3d'] = j3d_preds[j] # 72, 49, 3
                 batch['pred_keypoints_2d'] = (j2d_preds[j]-crop_size/2.) / (crop_size/2.) # 72, 49, 2
                 
-                loss_j, losses = self.criterion(batch, valid_range)
+                loss_j, losses = self.criterion(batch, self.valid_range)
                 loss += gamma**(N-j-1) * loss_j
                 
             loss *= self.cfg.TRAIN.LOSS_SCALE
@@ -122,12 +121,12 @@ class Trainer(BaseTrainer):
         loader = self.test_loader
         device = self.device
         db = loader.dataset
-
-        valid_range = (1,1)
+        
+        self.valid_range = self.cfg.MODEL.VALID_RANGE 
         # evaluator = Evaluator(dataset_length=len(db.imgname),
         #                       seq_len=getattr(model, 'seq_len', None))
         evaluator = Evaluator(dataset_length=len(db.imgname),
-                              seq_len=valid_range[1]-valid_range[0]+1)
+                              seq_len=self.valid_range[1]-self.valid_range[0]+1)
         J_regressor = db.J_regressor.to(device)
 
         for i, batch in enumerate(loader):
@@ -140,7 +139,7 @@ class Trainer(BaseTrainer):
             # prediction
             with torch.no_grad():
                 # batch.keys() ['img_idx', 'img_focal', 'img_center', 'img', 'pose', 'betas', 'pose_3d', 'gt_verts', 'keypoints', 'scale', 'center', 'has_smpl', 'has_pose_3d']
-                out, _ = model(batch, iters=update_iter) # 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
+                out, _ = model(batch, self.valid_range, iters=update_iter) # 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
                 
                 if '3dpw' in db.dataset:
                     mode = '3dpw'
@@ -161,7 +160,7 @@ class Trainer(BaseTrainer):
                     pred_keypoints_3d = pred_keypoints_3d - pred_pelvis # NOTE(yiwen) only focus on relative motion, not absolute position
                     
             # evaluation
-            gt_keypoints_3d = select_valid(gt_keypoints_3d, valid_range)
+            gt_keypoints_3d = select_valid(gt_keypoints_3d, self.valid_range)
             evaluator(gt_keypoints_3d, pred_keypoints_3d, mode)
 
 

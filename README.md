@@ -3,16 +3,17 @@
 
 # TODOs
 - [x] TRAM 3 frames baseline
-- [ ] check ./lib/models/configs useful?
+- [x] The visualization results are ok, so check the acc calculation
 - [ ] we always use the best model, but the standard is just pa-mpjpe, sometimes it is not for accer
 - [ ] 单个frame作为transformer的一支输入的话，还需不需要加positional encoding(原本是加在T维度上)
 - [ ] architecture design for online parts
-- [ ] tune model parameters based onv1
-- [ ] 只predict current和previous/future对比 问题 accel现在算的是一个chunk内的，只pred curr的话无法算 accel
+- [ ] tune model parameters smaller than 24
+- [ ] accel debug，可能一个batch的window没有取到连续的，用demo visualization
 
 
 # Findings
-* compare tram_online_v524 and retrain_online_v1, longer temporal expansion leads to smaller accer. 对前两个指标的影响基本可以忽略不计
+* the author has mentioned about the black image cropping in their supplementary material.
+* compare tram_online_v524 and retrain_online_v1, longer temporal expansion leads to smaller accer. 对前两个指标的影响基本可以忽略不计，增加了计算量（balance）,不用再加了
 * pred 3 (didn't change architecture, i.e. the head dim)，loss ablation on prev / prev + curr / prev + curr + future
 * prev future ablation 不是pred 不监督，而是直接不pred
 * TRAM 的结构对temporal的信息没有WHAM那么强的依赖性，没有贯穿始终的h0，所以改成3帧对效果的影响相对没有那么大
@@ -25,17 +26,24 @@ This project integrates the complete 4D human system, including tracking, slam, 
 
 ```bash
 # 1. Run Masked Droid SLAM (also detect+track humans in this step)
-python scripts/estimate_camera.py --video "./example_video000088_fortram3f.mp4"
-# -- You can indicate if the camera is static. The algorithm will try to catch it as well.
-python scripts/estimate_camera.py --video "./another_video.mov" --static_camera
+python scripts/estimate_camera.py --video "./example_video000088_trampcf.mp4"
+# # -- You can indicate if the camera is static. The algorithm will try to catch it as well.
+# python scripts/estimate_camera.py --video "./another_video.mov" --static_camera
 
 # 2. Run 4D human capture with VIMO.
-python scripts/estimate_humans.py --video "./example_video000088_fortram3f.mp4"
+# NOTE(yiwen) modify #Line45 checkpoint path
+# NOTE(yiwen) modify valid_range in config 
+# /home/yiwenzh5/onlineHMR_t/lib/models/configs/config_vimo.yaml
+python scripts/estimate_humans.py --video "./example_video000088_trampcf.mp4"
 
 # 3. Put everything together. Render the output video.
-python scripts/visualize_tram.py --video "./example_video000088_fortram3f.mp4"
+python scripts/visualize_tram.py --video "./example_video000088_trampcf.mp4"
 ```
 
+```
+# evaluation
+bash scripts/emdb/run.sh
+```
 
 ```
 # train

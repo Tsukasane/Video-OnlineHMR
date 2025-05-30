@@ -7,7 +7,7 @@ from lib.utils import rotation_conversions as geo
 
 # TODO(yiwen) gt 用 valid start，valid end; pred 用不同output dim
 def select_valid(batch_tensor, valid_range):
-    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[0]+1]
+    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[1]+1]
     batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
 
     return batch_tensor

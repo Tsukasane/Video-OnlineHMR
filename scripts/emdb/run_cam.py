@@ -27,7 +27,9 @@ args = parser.parse_args()
 # EMDB dataset and splits
 roots = []
 for p in range(10):
-    folder = f'/mnt/kostas-graid/datasets/yufu/emdb/P{p}'
+    if p>1: #NOTE(yiwen) debug
+        break
+    folder = f'/edrive2/yiwenzh5/tram_data/EMDB/P{p}'
     root = sorted(glob(f'{folder}/*'))
     roots.extend(root)
 
@@ -41,7 +43,7 @@ for root in roots:
 
 
 # Save folder
-savefolder = args.ourtput_dir
+savefolder = args.output_dir
 os.makedirs(savefolder, exist_ok=True)
 
 # ViTDet

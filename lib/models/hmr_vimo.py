@@ -18,7 +18,7 @@ autocast = torch.amp.autocast
 
 
 def select_valid(batch_tensor, valid_range):
-    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[0]+1]
+    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[1]+1]
     batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
 
     return batch_tensor
@@ -64,11 +64,13 @@ class HMR_VIMO(nn.Module):
             nlayer = cfg.MODEL.MOTION_NLAYER
 
             # online
+            head_dim = cfg.MODEL.VALID_RANGE[1] - cfg.MODEL.VALID_RANGE[0] + 1
             self.motion_module = temporal_attention_sw(in_dim=144+3, 
                                                     out_dim=144,
                                                     hdim=hdim,
                                                     nlayer=nlayer,
-                                                    is_img=False)
+                                                    is_img=False,
+                                                    head_dim=head_dim)
             
             # tram
             # self.motion_module = temporal_attention(in_dim=144+3, 
@@ -85,7 +87,7 @@ class HMR_VIMO(nn.Module):
         self.register_buffer('initialized', torch.tensor(False))
 
 
-    def forward(self, batch, **kwargs):
+    def forward(self, batch, valid_range=(0,2), **kwargs):
         '''
         Args:
             - batch (dict)
@@ -110,8 +112,6 @@ class HMR_VIMO(nn.Module):
         scale  = batch['scale'] # B*T
         img_focal = batch['img_focal'] # B*T
         img_center = batch['img_center'] # B*T, 2
-        
-        valid_range = (1,1)
 
         # estimate focal length, and bbox 
         bbox_info = self.bbox_est(center, scale, img_focal, img_center) # 128, 3

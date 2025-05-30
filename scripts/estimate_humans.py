@@ -42,7 +42,7 @@ tracks = [tracks[tid[r]] for r in rank]
 
 ##### Run HPS (here we use tram) #####
 print('Estimate HPS ...')
-model = get_hmr_vimo(checkpoint='/home/yiwenzh5/onlineHMR_t/results/tram_3f/checkpoint_best.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
+model = get_hmr_vimo(checkpoint='/home/yiwenzh5/onlineHMR_t/results/tram_prev+curr+future/checkpoint_best.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
 
 for k, trk in enumerate(tracks):
     valid = np.array([t['det'] for t in trk])

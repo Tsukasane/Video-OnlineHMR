@@ -23,7 +23,9 @@ args = parser.parse_args()
 # EMDB dataset and splits
 roots = []
 for p in range(10):
-    folder = f'/mnt/kostas-graid/datasets/yufu/emdb/P{p}'
+    if p>1: #NOTE(yiwen) debug
+        break
+    folder = f'/edrive2/yiwenzh5/tram_data/EMDB/P{p}'
     root = sorted(glob(f'{folder}/*'))
     roots.extend(root)
 
@@ -42,7 +44,7 @@ os.makedirs(savefolder, exist_ok=True)
 
 # HPS model
 device = 'cuda'
-model = get_hmr_vimo(checkpoint='data/pretrain/vimo_checkpoint.pth.tar').to(device)
+model = get_hmr_vimo(checkpoint='/home/yiwenzh5/onlineHMR_t/results/tram_3f/checkpoint_best.pth.tar').to(device)
 
 
 # Predict SMPL on EMDB (subset: spl)
