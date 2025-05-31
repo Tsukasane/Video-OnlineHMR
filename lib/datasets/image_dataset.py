@@ -33,13 +33,15 @@ class ImageDataset(Dataset):
         self.img_focal = img_focal
         self.img_center = img_center
 
+        self.seq_len = 3
+
         idx = np.arange(0, len(imgfiles))
-        self.seq_idx = view_as_windows(idx, (16,), step=step)
+        self.seq_idx = view_as_windows(idx, (self.seq_len,), step=step)
         
         # leftover
         self.leftover = len(imgfiles) % step
         if self.leftover != 0:
-            self.seq_idx = np.append(self.seq_idx, idx[-16:][None], axis=0)
+            self.seq_idx = np.append(self.seq_idx, idx[-self.seq_len:][None], axis=0)
 
 
     def __len__(self):

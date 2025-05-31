@@ -270,12 +270,14 @@ class HMR_VIMO(nn.Module):
             with torch.no_grad():
                 batch = {k: v.to(device) for k, v in batch.items() if type(v)==torch.Tensor}
                 # batch.keys() 'img', 'img_idx', 'scale', 'center', 'img_focal', 'img_center'
-                
+
+                print(f"debug -- {batch['img_idx']}")
                 out, _ = self.forward(batch) 
                 # out.keys() 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
 
-            # NOTE(yiwen) we only use the estimation of current frame
-            out = {k:v[1:-1] for k,v in out.items()}
+                if out['pred_cam'].shape[0] > 1: # more than curr frame
+                # NOTE(yiwen) we only use the estimation of current frame
+                    out = {k:v[1:-1] for k,v in out.items()}
             # if len(db) == 16: # video has three frames
             #     out = {k:v for k,v in out.items()} 
             # elif i == 15:

@@ -44,8 +44,9 @@ os.makedirs(savefolder, exist_ok=True)
 
 # HPS model
 device = 'cuda'
-model = get_hmr_vimo(checkpoint='/home/yiwenzh5/onlineHMR_t/results/tram_3f/checkpoint_best.pth.tar').to(device)
+model = get_hmr_vimo(checkpoint='/home/yiwenzh5/onlineHMR_t/results/tram_prev+curr+future/checkpoint_best.pth.tar').to(device)
 
+seq_len = 3
 
 # Predict SMPL on EMDB (subset: spl)
 for i, root in enumerate(emdb):
@@ -107,9 +108,12 @@ for i, root in enumerate(emdb):
             item = db[i]
             items.append(item)
 
-            if len(items) < 16:
+            valid_length = len(db)-len(db)%seq_len 
+            print(f"valid length = {len(db)-len(db)%seq_len}") # NOTE(yiwen) cut the last few frames if they cannot fill the seq_len in loader
+
+            if len(items) < seq_len:
                 continue
-            elif len(items) == 16:
+            elif len(items) == seq_len:
                 batch = default_collate(items)
             else:
                 items.pop(0)
@@ -119,20 +123,22 @@ for i, root in enumerate(emdb):
                 batch = {k: v.to(device) for k, v in batch.items() if type(v)==torch.Tensor}
                 out, _ = model.forward(batch)
 
-            if i == 15:
-                out = {k:v[:9] for k,v in out.items()}
-            elif i == len(db) - 1:
-                out = {k:v[8:] for k,v in out.items()}
-            else:
-                out = {k:v[[8]] for k,v in out.items()}
+                print(f"debug -- {batch['img_idx']}")
                 
-            pred_cam.append(out['pred_cam'].cpu())
+                # out.keys() 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
+
+                if out['pred_cam'].shape[0] > 1: # more than curr frame
+                # NOTE(yiwen) we only use the estimation of current frame
+                    out = {k:v[1:-1] for k,v in out.items()}
+            
+            pred_cam.append(out['pred_cam'].cpu()) # [3, 3]
             pred_pose.append(out['pred_pose'].cpu())
             pred_shape.append(out['pred_shape'].cpu())
             pred_rotmat.append(out['pred_rotmat'].cpu())
             pred_trans.append(out['trans_full'].cpu())
 
-
+            # NOTE(yiwen) corresponding gt[1:valid_length+1]
+            
     results = {'pred_cam': torch.cat(pred_cam),
             'pred_pose': torch.cat(pred_pose),
             'pred_shape': torch.cat(pred_shape),

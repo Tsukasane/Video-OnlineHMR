@@ -1,6 +1,51 @@
 # Video-Based Online Human Mesh Recovery
 
 
+
+# Metrics
+- Pose and Shape
+MPJPE: mean per-joint error
+PA-MPJPE: Procrustes-aligned per-joint error
+PVE: per-vertex error
+ACCEL: acceleration error against the ground truth acceleration.
+
+- Camera Trajectory
+ATE: absolute trajectory error
+ATE-S: using our estimated scale
+
+- Human Trajectory
+W-MPJPE100: slice a sequence into 100-frame segments and evaluate 3D joint error after aligning the first two frames
+WA-MPJPE100: Align the entire segment
+ERVE: egocentric-frame root velocity error (measure the root motion accuracy)
+RTE: root translation error normalized by the total displacement after rigid alignment without scaling
+
+
+# Results
+/home/yiwenzh5/onlineHMR_t/results/tram_prev+curr+future/checkpoint_best.pth.tar
+pa_mpjpe 39.76841
+mpjpe 56.681545
+pve 65.73447
+accel 10.790377
+wa_mpjpe 83.939156
+w_mpjpe 256.69885
+rte 1.9958116
+erve 11.128026
+ate 0.5296143804816823
+ate_s 1.3463763307677443
+
+Official released 16 frames tram
+pa_mpjpe 34.42669
+mpjpe 45.53531
+pve 50.97477
+accel 4.473362
+wa_mpjpe 78.92915
+w_mpjpe 221.90569
+rte 2.0372977
+erve 8.908163
+ate 0.5238046122890667
+ate_s 1.346546306407243
+
+
 # TODOs
 - [x] TRAM 3 frames baseline
 - [x] The visualization results are ok, so check the acc calculation
@@ -9,6 +54,7 @@
 - [ ] architecture design for online parts
 - [ ] tune model parameters smaller than 24
 - [ ] accel debug，可能一个batch的window没有取到连续的，用demo visualization
+- [ ] accel measures how similar the gt accel compared to the pred accel
 
 
 # Findings
