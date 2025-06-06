@@ -19,12 +19,13 @@ parser.add_argument('--output_dir', type=str, default='results/emdb/smpl')
 parser.add_argument('--efficient', action='store_true', help='efficient option, but increase ACC error.')
 args = parser.parse_args()
 
+valid_range = (1,1)
 
 # EMDB dataset and splits
 roots = []
 for p in range(10):
-    if p>1: #NOTE(yiwen) debug
-        break
+    # if p>1: #NOTE(yiwen) debug
+    #     break
     folder = f'/edrive2/yiwenzh5/tram_data/EMDB/P{p}'
     root = sorted(glob(f'{folder}/*'))
     roots.extend(root)
@@ -44,7 +45,7 @@ os.makedirs(savefolder, exist_ok=True)
 
 # HPS model
 device = 'cuda'
-model = get_hmr_vimo(checkpoint='/home/yiwenzh5/onlineHMR_t/results/tram_prev+curr+future/checkpoint_best.pth.tar').to(device)
+model = get_hmr_vimo(checkpoint='/home/yiwenzh5/onlineHMR_t/results/tram_curronly/checkpoint_best.pth.tar').to(device)
 
 seq_len = 3
 
@@ -87,7 +88,7 @@ for i, root in enumerate(emdb):
                                         batch[k]], dim=0)
             
             with torch.no_grad():
-                out, _ = model(batch)
+                out, _ = model(batch, valid_range=valid_range)
 
             # Last batch
             if n < 64:
@@ -121,15 +122,18 @@ for i, root in enumerate(emdb):
 
             with torch.no_grad():
                 batch = {k: v.to(device) for k, v in batch.items() if type(v)==torch.Tensor}
-                out, _ = model.forward(batch)
+                out, _ = model.forward(batch, valid_range=valid_range)
 
                 print(f"debug -- {batch['img_idx']}")
                 
                 # out.keys() 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
 
-                if out['pred_cam'].shape[0] > 1: # more than curr frame
+                if out['pred_cam'].shape[0] == 3: # prev+curr+future
                 # NOTE(yiwen) we only use the estimation of current frame
                     out = {k:v[1:-1] for k,v in out.items()}
+
+                elif out['pred_cam'].shape[0] == 2: # prev+curr
+                    out = {k:v[1:] for k,v in out.items()}
             
             pred_cam.append(out['pred_cam'].cpu()) # [3, 3]
             pred_pose.append(out['pred_pose'].cpu())

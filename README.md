@@ -20,19 +20,12 @@ ERVE: egocentric-frame root velocity error (measure the root motion accuracy)
 RTE: root translation error normalized by the total displacement after rigid alignment without scaling
 
 
-# Results
-/home/yiwenzh5/onlineHMR_t/results/tram_prev+curr+future/checkpoint_best.pth.tar
-pa_mpjpe 39.76841
-mpjpe 56.681545
-pve 65.73447
-accel 10.790377
-wa_mpjpe 83.939156
-w_mpjpe 256.69885
-rte 1.9958116
-erve 11.128026
-ate 0.5296143804816823
-ate_s 1.3463763307677443
+# Settings
+folder -- expansion
+/home/yiwenzh5/onlineHMR_t/results/tram_prev+curr+future 24
 
+
+# Results
 Official released 16 frames tram
 pa_mpjpe 34.42669
 mpjpe 45.53531
@@ -47,8 +40,7 @@ ate_s 1.346546306407243
 
 
 # TODOs
-- [x] TRAM 3 frames baseline
-- [x] The visualization results are ok, so check the acc calculation
+- [ ] TRAM 3 frames 也需要改成 16 frame chunk算valacc
 - [ ] we always use the best model, but the standard is just pa-mpjpe, sometimes it is not for accer
 - [ ] 单个frame作为transformer的一支输入的话，还需不需要加positional encoding(原本是加在T维度上)
 - [ ] architecture design for online parts
@@ -87,6 +79,7 @@ python scripts/visualize_tram.py --video "./example_video000088_trampcf.mp4"
 ```
 
 ```
+# modify valid_range in /home/yiwenzh5/onlineHMR_t/lib/models/configs/config_vimo.yaml, also run_smpl.py
 # evaluation
 bash scripts/emdb/run.sh
 ```

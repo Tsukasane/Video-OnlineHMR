@@ -25,8 +25,8 @@ input_dir = args.input_dir
 # EMDB dataset and splits
 roots = []
 for p in range(10):
-    if p>1: #NOTE(yiwen) debug
-        break
+    # if p>1: #NOTE(yiwen) debug
+    #     break
     folder = f'/edrive2/yiwenzh5/tram_data/EMDB/P{p}'
     root = sorted(glob(f'{folder}/*'))
     roots.extend(root)

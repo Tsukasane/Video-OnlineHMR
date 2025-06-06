@@ -271,21 +271,17 @@ class HMR_VIMO(nn.Module):
                 batch = {k: v.to(device) for k, v in batch.items() if type(v)==torch.Tensor}
                 # batch.keys() 'img', 'img_idx', 'scale', 'center', 'img_focal', 'img_center'
 
+                # default valid_range = (0,2)
                 print(f"debug -- {batch['img_idx']}")
                 out, _ = self.forward(batch) 
                 # out.keys() 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
-
-                if out['pred_cam'].shape[0] > 1: # more than curr frame
+                
+                if out['pred_cam'].shape[0] == 3: # prev+curr+future
                 # NOTE(yiwen) we only use the estimation of current frame
                     out = {k:v[1:-1] for k,v in out.items()}
-            # if len(db) == 16: # video has three frames
-            #     out = {k:v for k,v in out.items()} 
-            # elif i == 15:
-            #     out = {k:v[:9] for k,v in out.items()} # if less than one window
-            # elif i == len(db) - 1:
-            #     out = {k:v[8:] for k,v in out.items()} # the later 8 frames
-            # else:
-            #     out = {k:v[[8]] for k,v in out.items()}
+
+                elif out['pred_cam'].shape[0] == 2: # prev+curr
+                    out = {k:v[1:] for k,v in out.items()}
 
             pred_cam.append(out['pred_cam'].cpu())
             pred_pose.append(out['pred_pose'].cpu())
@@ -293,12 +289,12 @@ class HMR_VIMO(nn.Module):
             pred_rotmat.append(out['pred_rotmat'].cpu())
             pred_trans.append(out['trans_full'].cpu())
 
-            if i==0: # padding the first and the last, since sliding window cannot process the first and last frame of a sequence
-                pred_cam.append(out['pred_cam'].cpu())
-                pred_pose.append(out['pred_pose'].cpu())
-                pred_shape.append(out['pred_shape'].cpu())
-                pred_rotmat.append(out['pred_rotmat'].cpu())
-                pred_trans.append(out['trans_full'].cpu())
+            # if i==0: # padding the first and the last, since sliding window cannot process the first and last frame of a sequence
+            #     pred_cam.append(out['pred_cam'].cpu())
+            #     pred_pose.append(out['pred_pose'].cpu())
+            #     pred_shape.append(out['pred_shape'].cpu())
+            #     pred_rotmat.append(out['pred_rotmat'].cpu())
+            #     pred_trans.append(out['trans_full'].cpu())
 
         results = {'pred_cam': torch.cat(pred_cam),
                 'pred_pose': torch.cat(pred_pose),

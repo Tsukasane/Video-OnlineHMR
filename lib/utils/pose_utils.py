@@ -173,12 +173,12 @@ class Evaluator:
                                                      pred_keypoints_3d, 
                                                      dataset)
         # 48, 24, 3 --> 16, 24, 3
-        # gt_valid = select_valid(gt_valid, self.valid_range)
-        # pred_valid = select_valid(pred_valid, self.valid_range)
+        gt_valid = select_valid(gt_valid, self.valid_range)
+        pred_valid = select_valid(pred_valid, self.valid_range)
         
-        batch_size = gt_valid.shape[0]
+        batch_size = self.chunk_size # only count the current frame
         # Compute joint errors
-        mpjpe, re = eval_pose(pred_valid, gt_valid)
+        mpjpe, re = eval_pose(pred_valid, gt_valid) # only pass current frame to eval pose
 
         self.mpjpe[self.counter:self.counter+batch_size] = mpjpe
         self.re[self.counter:self.counter+batch_size] = re
@@ -189,12 +189,11 @@ class Evaluator:
 
         if self.seq_len is not None:
             # NOTE(yiwen) if prev+curr, then avg(prev 16 accel, curr 16 accel)
-            gt = gt_keypoints_3d.reshape(-1, self.chunk_size, num_j, 3).cpu() # 2, 16, 24, 3
-            pred = pred_keypoints_3d.reshape(-1, self.chunk_size, num_j, 3).cpu()
+            gt = gt_keypoints_3d.reshape(self.chunk_size, -1, num_j, 3).cpu()[:,1:2].reshape(-1, num_j, 3) # 2, 16, 24, 3
+            pred = pred_keypoints_3d.reshape(self.chunk_size, -1, num_j, 3).cpu()[:,1:2].reshape(-1, num_j, 3)
             acc = 0 # NOTE(yiwen) originally calculate the acc error in each window
 
-            for i in range(len(gt)):
-                acc += compute_error_accel(gt[i], pred[i]).mean() / len(gt)
+            acc += compute_error_accel(gt, pred).mean() / 1.0 # len 16 chunk accer calculation
             self.acc[self.counter:self.counter+batch_size] = acc * 1000 #(30**2)
             
         self.counter += batch_size

@@ -163,7 +163,6 @@ class Trainer(BaseTrainer):
             gt_keypoints_3d = select_valid(gt_keypoints_3d, self.valid_range)
             evaluator(gt_keypoints_3d, pred_keypoints_3d, mode)
 
-
         re = evaluator.re[:evaluator.counter].mean()
         mpjpe = evaluator.mpjpe[:evaluator.counter].mean()
         acc = evaluator.acc[:evaluator.counter].mean()

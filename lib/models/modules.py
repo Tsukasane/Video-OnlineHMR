@@ -100,7 +100,7 @@ class temporal_attention_sw(nn.Module):
         self.spa_expansion_layer = nn.Linear(self.out_h*self.out_w, 192) #v4
 
         # motion
-        self.expanded_tem_mdim = 24 # 16
+        self.expanded_tem_mdim = 18 # NOTE(yiwen) tune para here12 15 18 24
         self.tem_expansion_layer1 = nn.Linear(self.frame_chunk_size, self.expanded_tem_mdim)
         self.tem_expansion_layer2 = nn.Linear(self.frame_chunk_size, self.expanded_tem_mdim)
         self.tem_compact_layer1 = nn.Linear(self.expanded_tem_mdim, 3*self.frame_chunk_size)

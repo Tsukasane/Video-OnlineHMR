@@ -51,10 +51,10 @@ MODEL:
   MOTION_HDIM: 384
   ST_NLAYER: 6
   MOTION_NLAYER: 6
-  VALID_RANGE: (1,1)
+  VALID_RANGE: (0,2)
 
 
-EXP_NAME: 'tram_curronly' # shorter temporal expansion dims
+EXP_NAME: 'tram_pcf18' # shorter temporal expansion dims
 COMMENT:
   'Default configs.'
 
