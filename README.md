@@ -40,12 +40,11 @@ ate_s 1.346546306407243
 
 
 # TODOs
-- [ ] TRAM 3 frames 也需要改成 16 frame chunk算valacc
-- [ ] we always use the best model, but the standard is just pa-mpjpe, sometimes it is not for accer
+- [ ] Tram 3f 在PSC上用单独的代码，也按 16 frames eval
 - [ ] 单个frame作为transformer的一支输入的话，还需不需要加positional encoding(原本是加在T维度上)
 - [ ] architecture design for online parts
-- [ ] tune model parameters smaller than 24
-- [ ] accel debug，可能一个batch的window没有取到连续的，用demo visualization
+- [ ] single joint visualization
+- [ ] more cases to show the effectiveness of frequency domain jittering eval
 - [ ] accel measures how similar the gt accel compared to the pred accel
 
 

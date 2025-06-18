@@ -80,7 +80,7 @@ class temporal_attention_sw(nn.Module):
 
         self.pos_embedding = PositionalEncoding(hdim, dropout=0.1)
         self.conformer = Conformer(d_model=512, n_heads=1, num_layers=3)
-        self.naive_transfomer = ShortWindowTransformer(d_model=hdim, n_heads=4, num_layers=6)
+        self.naive_transfomer = ShortWindowTransformer(d_model=hdim, n_heads=4, num_layers=6) # 4
 
         self.frame_chunk_size = 1
 
@@ -100,7 +100,7 @@ class temporal_attention_sw(nn.Module):
         self.spa_expansion_layer = nn.Linear(self.out_h*self.out_w, 192) #v4
 
         # motion
-        self.expanded_tem_mdim = 18 # NOTE(yiwen) tune para here12 15 18 24
+        self.expanded_tem_mdim = 12 # NOTE(yiwen) tune para here12 15 18 24
         self.tem_expansion_layer1 = nn.Linear(self.frame_chunk_size, self.expanded_tem_mdim)
         self.tem_expansion_layer2 = nn.Linear(self.frame_chunk_size, self.expanded_tem_mdim)
         self.tem_compact_layer1 = nn.Linear(self.expanded_tem_mdim, 3*self.frame_chunk_size)

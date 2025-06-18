@@ -9,6 +9,24 @@ from typing import Optional, Dict, List, Tuple
 from lib.core import constants
 
 
+from freq_motion import plot_spectrogram
+
+def cal_spectrogram_similarity(gt_amp, pred_amp):
+    # 1) MSE
+    mse = torch.mean((gt_amp - pred_amp) ** 2)
+
+    # 2) LSD
+    lsd = torch.sqrt(torch.mean((20 * torch.log10(gt_amp + 1e-6) - 20 * torch.log10(pred_amp + 1e-6)) ** 2))
+
+    # 3) Corr
+    gt_mean = torch.mean(gt_amp)
+    pred_mean = torch.mean(pred_amp)
+    numerator = torch.sum((gt_amp - gt_mean) * (pred_amp - pred_mean))
+    denominator = torch.sqrt(torch.sum((gt_amp - gt_mean) ** 2) * torch.sum((pred_amp - pred_mean) ** 2))
+    corr = numerator / (denominator + 1e-8)
+
+    print(f'spectrogram similarity -- MSE:{mse}, LSD:{lsd}, CORR:{corr}')
+
 def select_valid(batch_tensor, valid_range):
     batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[1]+1]
     batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
@@ -175,6 +193,12 @@ class Evaluator:
         # 48, 24, 3 --> 16, 24, 3
         gt_valid = select_valid(gt_valid, self.valid_range)
         pred_valid = select_valid(pred_valid, self.valid_range)
+
+        gt_amplitude = plot_spectrogram(gt_valid, sr=30*24, save_name="vis_GT.png")
+        pred_amplitude = plot_spectrogram(pred_valid, sr=30*24, save_name="vis_Pred.png")
+
+        cal_spectrogram_similarity(gt_amplitude, pred_amplitude)
+        """e.g. spectrogram similarity -- MSE⬇️:0.4421258568763733, LSD⬇️:5.611983776092529, CORR⬆️:0.9915153980255127"""
         
         batch_size = self.chunk_size # only count the current frame
         # Compute joint errors

@@ -5,7 +5,6 @@ import torch.nn.functional as F
 from lib.utils.geometry import batch_rodrigues
 from lib.utils import rotation_conversions as geo
 
-# TODO(yiwen) gt 用 valid start，valid end; pred 用不同output dim
 def select_valid(batch_tensor, valid_range):
     batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[1]+1]
     batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
@@ -60,7 +59,7 @@ def keypoint_3d_loss(batch, valid_range=(0,2)):
     pred_keypoints_3d = pred_keypoints_3d[:, 25:, :]
     conf = gt_keypoints_3d[:, :, -1].unsqueeze(-1).clone()
     gt_keypoints_3d = gt_keypoints_3d[:, :, :-1].clone()
-    gt_keypoints_3d = gt_keypoints_3d[has_pose_3d == 1]
+    gt_keypoints_3d = gt_keypoints_3d[has_pose_3d == 1] # 72, 24, 3
     conf = conf[has_pose_3d == 1]
     pred_keypoints_3d = pred_keypoints_3d[has_pose_3d == 1]
 
@@ -77,7 +76,7 @@ def keypoint_3d_loss(batch, valid_range=(0,2)):
     # print(f'debug -- 3d kpt loss {loss}')
     return loss
 
-def acceleration_loss(batch):
+def acceleration_loss(batch): # NOTE(yiwen) didn't use in training, require further modification if using
     """Compute 3D keypoint acceleration loss.
     The loss is weighted by the confidence.
     """
