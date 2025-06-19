@@ -62,7 +62,7 @@ class HMR_VIMO(nn.Module):
         self.register_buffer('initialized', torch.tensor(False))
 
 
-    def forward(self, batch, **kwargs):
+    def forward(self, batch, valid_range=(0,2), **kwargs):
         image  = batch['img'] # 128, 3, 256, 256
         center = batch['center']
         scale  = batch['scale']
@@ -206,14 +206,20 @@ class HMR_VIMO(nn.Module):
                 batch = {k: v.to(device) for k, v in batch.items() if type(v)==torch.Tensor}
                 out, _ = self.forward(batch)
 
-            if len(db) == 16:
-                out = {k:v for k,v in out.items()}
-            elif i == 15:
-                out = {k:v[:9] for k,v in out.items()}
-            elif i == len(db) - 1:
-                out = {k:v[8:] for k,v in out.items()}
-            else:
-                out = {k:v[[8]] for k,v in out.items()}
+            if out['pred_cam'].shape[0] == 3: # prev+curr+futureAdd commentMore actions
+                # NOTE(yiwen) we only use the estimation of current frame
+                out = {k:v[1:-1] for k,v in out.items()}
+
+            elif out['pred_cam'].shape[0] == 2: # prev+currAdd commentMore actions
+                out = {k:v[1:] for k,v in out.items()}
+            # if len(db) == 16:
+            #     out = {k:v for k,v in out.items()}
+            # elif i == 15:
+            #     out = {k:v[:9] for k,v in out.items()}
+            # elif i == len(db) - 1:
+            #     out = {k:v[8:] for k,v in out.items()}
+            # else:
+            #     out = {k:v[[8]] for k,v in out.items()}
                 
             pred_cam.append(out['pred_cam'].cpu())
             pred_pose.append(out['pred_pose'].cpu())

@@ -154,11 +154,11 @@ class VideoDataset(Dataset):
 
         if 'coco' not in self.dataset:
             self.seq_idx, self.group = self.split_into_chunks(self.seqname, seqlen, stride=stride)
-
             if (not is_train) and subset:
-                np.random.seed(0)
-                self.seq_idx = np.random.permutation(self.seq_idx)
-                self.seq_idx = self.seq_idx[:300].tolist()
+                # np.random.seed(0)
+                # self.seq_idx = np.random.permutation(self.seq_idx) # NOTE(yiwen) no suffle to cal accel
+                # self.seq_idx = self.seq_idx[:300].tolist()
+                self.seq_idx = self.seq_idx[:300]
                 print(f'Using a subset of {self.dataset}')
 
             seqs = []

@@ -41,7 +41,7 @@ TRAIN:
   LOSS_SCALE: 1
  
 TEST:
-  BATCH_SIZE: 8
+  BATCH_SIZE: 16
 
 MODEL:
   CHECKPOINT: 'data/pretrain/hmr2b/epoch=35-step=1000000.ckpt'
@@ -51,10 +51,9 @@ MODEL:
   MOTION_HDIM: 384
   ST_NLAYER: 6
   MOTION_NLAYER: 6
+  VALID_RANGE: (0,2)
 
 
-EXP_NAME: 'tram_3f'
+EXP_NAME: 'tram_3f' # shorter temporal expansion dims
 COMMENT:
   'Default configs.'
-
-

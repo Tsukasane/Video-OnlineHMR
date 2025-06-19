@@ -5,6 +5,13 @@ import torch.nn.functional as F
 from lib.utils.geometry import batch_rodrigues
 from lib.utils import rotation_conversions as geo
 
+def select_valid(batch_tensor, valid_range):
+    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[1]+1]
+    batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
+
+    return batch_tensor
+
+
 def compute_l2_loss(batch):
     x2 = batch["x2"]
     output = batch["output"]
@@ -13,13 +20,17 @@ def compute_l2_loss(batch):
     return loss
 
 
-def keypoint_loss(batch, openpose_weight=0., gt_weight=1.):
+def keypoint_loss(batch, valid_range=(0,2), openpose_weight=0., gt_weight=1.):
     """ Compute 2D reprojection loss on the keypoints.
     The loss is weighted by the confidence.
     The available keypoints are different for each dataset.
     """
-    pred_keypoints_2d = batch['pred_keypoints_2d']
-    gt_keypoints_2d = batch['keypoints']
+
+    # pred_keypoints_2d = select_valid(batch['pred_keypoints_2d'], valid_range)
+    gt_keypoints_2d = select_valid(batch['keypoints'], valid_range)
+
+    pred_keypoints_2d = batch['pred_keypoints_2d'] # 72, 49, 2
+    # gt_keypoints_2d = batch['keypoints'] # 72, 49, 3
 
     conf = gt_keypoints_2d[:, :, [-1]].clone()
     conf[:, :25] *= openpose_weight
@@ -27,16 +38,22 @@ def keypoint_loss(batch, openpose_weight=0., gt_weight=1.):
 
     mse  = F.mse_loss(pred_keypoints_2d, gt_keypoints_2d[:, :, :-1], reduction='none')
     loss = (conf * mse).mean()
+    # print(f'debug 2d kpt loss: {loss}')
     return loss
 
 
-def keypoint_3d_loss(batch):
+def keypoint_3d_loss(batch, valid_range=(0,2)):
     """Compute 3D keypoint loss for the examples that 3D keypoint annotations are available.
     The loss is weighted by the confidence.
     """
-    pred_keypoints_3d = batch['pred_keypoints_3d']
-    gt_keypoints_3d = batch['pose_3d']
-    has_pose_3d = batch['has_pose_3d']
+
+    # pred_keypoints_3d = select_valid(batch['pred_keypoints_3d'], valid_range) # 72, 49, 3
+    gt_keypoints_3d = select_valid(batch['pose_3d'], valid_range) # 72, 24, 4
+    has_pose_3d = select_valid(batch['has_pose_3d'], valid_range) # 72
+
+    pred_keypoints_3d = batch['pred_keypoints_3d'] # 72, 49, 3
+    # gt_keypoints_3d = batch['pose_3d'] # 72, 24, 4
+    # has_pose_3d = batch['has_pose_3d'] # 72
     device = pred_keypoints_3d.device
 
     pred_keypoints_3d = pred_keypoints_3d[:, 25:, :]
@@ -56,7 +73,7 @@ def keypoint_3d_loss(batch):
         loss = (conf * mse).mean()
     else:
         loss = torch.FloatTensor(1).fill_(0.).mean().to(device)
-
+    # print(f'debug -- 3d kpt loss {loss}')
     return loss
 
 def acceleration_loss(batch):
@@ -113,19 +130,20 @@ def smpl_losses(batch, pose_weight=1., beta_weight=0.001):
     loss = pose_weight*loss_regr_pose + beta_weight*loss_regr_betas
     return loss
 
-def smpl_losses_plus(batch, pose_weight=1., beta_weight=0.001, init_w=1.0):
+def smpl_losses_plus(batch, valid_range=(0,2), pose_weight=1., beta_weight=0.001, init_w=1.0):
     pred_rotmat_0 = batch['pred_rotmat_0']
     pred_rotmat = batch['pred_rotmat']
     pred_betas  = batch['pred_betas']
-    gt_pose  = batch['pose']
-    gt_betas = batch['betas']
-    has_smpl = batch['has_smpl']
+    gt_pose  = select_valid(batch['pose'], valid_range)
+    gt_betas = select_valid(batch['betas'], valid_range)
+    has_smpl = select_valid(batch['has_smpl'], valid_range)
+    
     beta_weight = batch['beta_weight']
     device = pred_rotmat.device
 
     pred_rotmat_0_valid = pred_rotmat_0[has_smpl == 1]
     pred_rotmat_valid = pred_rotmat[has_smpl == 1]
-    gt_rotmat_valid = batch_rodrigues(gt_pose.view(-1,3)).view(-1, 24, 3, 3)[has_smpl == 1]
+    gt_rotmat_valid = batch_rodrigues(gt_pose.reshape(-1,3)).reshape(-1, 24, 3, 3)[has_smpl == 1]
     pred_betas_valid = pred_betas[has_smpl == 1]
     gt_betas_valid = gt_betas[has_smpl == 1]
 
@@ -138,13 +156,16 @@ def smpl_losses_plus(batch, pose_weight=1., beta_weight=0.001, init_w=1.0):
         loss_regr_betas = torch.FloatTensor(1).fill_(0.).mean().to(device)
         loss_regr_pose  = torch.FloatTensor(1).fill_(0.).mean().to(device)  
 
-    loss = pose_weight*loss_regr_pose + beta_weight*loss_regr_betas
+    loss = pose_weight*loss_regr_pose + beta_weight*loss_regr_betas  
+    # print(f'debug -- smpl loss plus {loss}')
     return loss
 
-def vertice_loss(batch):
-    pred_rotmat = batch['pred_rotmat']
-    pred_betas  = batch['pred_betas']
-    has_smpl = batch['has_smpl']
+def vertice_loss(batch, valid_range=(0,2)):
+
+    pred_rotmat = batch['pred_rotmat'] # 72, 24, 3, 3
+    pred_betas  = batch['pred_betas']# 72, 10
+    has_smpl = select_valid(batch['has_smpl'], valid_range) # 72
+
     smpl = batch['smpl']
     device = pred_rotmat.device
 
@@ -154,12 +175,11 @@ def vertice_loss(batch):
                     betas=pred_betas, 
                     pose2rot=False)
     pred_vert = pred_out.vertices
-
     # gt vertices
     if 'gt_vert' not in batch:
-        gt_pose  = batch['pose']
-        gt_betas = batch['betas']
-        gt_rotmat = batch_rodrigues(gt_pose.view(-1,3)).view(-1, 24, 3, 3)
+        gt_pose  = select_valid(batch['pose'], valid_range)
+        gt_betas = select_valid(batch['betas'], valid_range)
+        gt_rotmat = batch_rodrigues(gt_pose.reshape(-1,3)).reshape(-1, 24, 3, 3)
 
         gt_out = smpl(global_orient=gt_rotmat[:,[0]],
                       body_pose=gt_rotmat[:,1:],
@@ -168,7 +188,7 @@ def vertice_loss(batch):
         gt_vert = gt_out.vertices
         batch['gt_vert'] = gt_vert
     else:
-        gt_vert = batch['gt_vert']
+        gt_vert = select_valid(batch['gt_vert'], valid_range)
 
     gt_vert = gt_vert[has_smpl == 1]
     pred_vert = pred_vert[has_smpl == 1]
@@ -177,7 +197,7 @@ def vertice_loss(batch):
         loss  = F.l1_loss(pred_vert, gt_vert)
     else:
         loss = torch.FloatTensor(1).fill_(0.).mean().to(device)
-
+    # print(f'debug -- vertice loss {loss}')
     return loss
 
 
@@ -228,11 +248,12 @@ class BaseLoss(torch.nn.Module):
         self.weights = {}
         self.functions = {}
 
-    def forward(self, batch):
+    def forward(self, batch, valid_range):
         losses = {}
         mixes_loss = 0
+        
         for t, w in self.weights.items():
-            loss = self.functions[t](batch)
+            loss = self.functions[t](batch, valid_range)
             mixes_loss += w * loss
             losses[t] = loss.item()
 
@@ -270,4 +291,3 @@ class KptsMSELoss(torch.nn.Module):
             loss = self.criterion(heatmaps_pred, heatmaps_gt)
 
         return loss 
-
