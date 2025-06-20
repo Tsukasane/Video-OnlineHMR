@@ -70,7 +70,7 @@ class Trainer(BaseTrainer):
 
             self.optimizer.step()
             
-            self.global_step += 1
+            self.global_step += 1 #NOTE(yiwen) step number will be different, but epoch is the same
             self.loss_meter.update(losses)
             self.lr_scheduler.step()
 

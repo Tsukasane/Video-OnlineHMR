@@ -501,10 +501,12 @@ class VideoDataset(Dataset):
             else:
                 indexes_invalid = invalid[group[idx]:group[idx+1]]
 
-            chunks = view_as_windows(indexes, (seqlen,), step=stride)
-
-            # print(f'debug -- chunks.shape {chunks.shape}')
-            chunks_invalid = view_as_windows(indexes_invalid, (seqlen,), step=stride)
+            if self.is_train:
+                chunks = view_as_windows(indexes, (seqlen,), step=stride)
+                chunks_invalid = view_as_windows(indexes_invalid, (seqlen,), step=stride)
+            else: # NOTE(yiwen) iftest, each window len=3, step=1, total length=seqlen-2
+                chunks = view_as_windows(indexes, (seqlen,), step=1)
+                chunks_invalid = view_as_windows(indexes_invalid, (seqlen,), step=1)
             
             chunks_valid = chunks[chunks_invalid.sum(axis=-1)==0]
             
@@ -525,5 +527,4 @@ class VideoDataset(Dataset):
         invalid = (bbox[:,2]<0) + (bbox[:,3]<0) + (bbox[:,0]>shape[:,0]) + (bbox[:,1]>shape[:,1])
         invalid = invalid + (self.data['valid']!=1)
         return invalid
-
 
