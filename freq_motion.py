@@ -1,42 +1,23 @@
 import pickle
 import numpy as np
-import librosa
-import librosa.display
 import matplotlib.pyplot as plt
 import torch
 import torchaudio
+import torch.nn.functional as F
 
 
-filename = "/Users/yiwenzhao/Desktop/research_general/STFT/_P-JWcq1ewI_05_0_1380_slice28.pkl" #"/Users/yiwenzhao/Desktop/research_general/STFT/uitvYa5NsJI_07_0_1200_slice31.pkl"
-# with open (filename, 'rb') as f:
-#     inputs = pickle.load(f)
-#     smpl_poses = inputs["smpl_poses"]
-#     smpl_trans = inputs["smpl_trans"]
-#     full_pose = inputs["full_pose"]
-    
-#     y = smpl_poses[2, :, ].reshape(-1,) # T first_person
-    # D = librosa.stft(y)  
-    # S_db = np.abs(D)
-    # S_db = librosa.amplitude_to_db(np.abs(D), ref=np.max)  
-    # librosa.display.specshow(magnitude[0].cpu(), sr=sr, x_axis='time', y_axis='linear') # linear scale, instead of log scale in audio
-    # plt.colorbar(format='%+2.0f')
-    # plt.title('Motion Spectrogram')
-    # plt.tight_layout()
-    # plt.savefig(save_name)
-    
-
-def plot_spectrogram(keypoints_3d, sr=30, save_name="mspec.png"):
+def plot_spectrogram(keypoints_3d, sr=30, save_name="mspec.png", align_interpolate=True):
     '''
     Args:
         - keypoints_3d: seqlen, 24, 3
         - sr: sample rate
         - save_name: figure name
+        - align_interpolate: whether align time to original sequence (frame)
     '''
-    # sr = 30 * 72 # 30FPS * 72Dpose
-
     device = keypoints_3d.device
     y = keypoints_3d.reshape(-1,)
     
+    seqlen = keypoints_3d.shape[0]
 
     n_fft = int(sr * 1)   # 1 second window size
     hop_length = n_fft // 4  # 75% overlap
@@ -53,16 +34,27 @@ def plot_spectrogram(keypoints_3d, sr=30, save_name="mspec.png"):
     )
 
     D = transform(y)  # [channel, freq, time]
-    amplitude = torch.abs(D)
+    amplitude_raw = torch.abs(D)
 
+    if align_interpolate:
+        amplitude = F.interpolate(
+            amplitude_raw,
+            size=seqlen,
+            mode="linear",
+            align_corners=True)[0]
+    else:
+        amplitude = amplitude_raw[0]
+
+    plot_amplitude(amplitude, save_name)
+
+    return amplitude
+
+
+def plot_amplitude(amplitude, save_name):
     plt.figure(figsize=(10, 4))
-    plt.imshow(amplitude[0].cpu(), origin='lower', aspect='auto', cmap='inferno')
+    plt.imshow(amplitude.cpu(), origin='lower', aspect='auto', cmap='inferno')
     plt.colorbar(format='%+2.0f')
     plt.title('Motion Spectrogram')
     plt.tight_layout()
     plt.savefig(save_name)
-
-    return amplitude[0]
-
-    # import pdb
-    # pdb.set_trace()
+    plt.close()

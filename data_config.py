@@ -14,8 +14,8 @@ from os.path import join
 # ---- emdb
 
 # Please change these two lines for your directories
-ROOT = '/edrive2/yiwenzh5/tram_data/datasets'
-DATASET_NPZ_PATH = '/edrive2/yiwenzh5/tram_data/datasets/dataset_ann'
+ROOT = '/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/datasets'
+DATASET_NPZ_PATH = '/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/datasets/dataset_ann'
 
 H36M_ROOT         = join(ROOT, 'h36m')
 PW3D_ROOT         = join(ROOT, '3dpw')

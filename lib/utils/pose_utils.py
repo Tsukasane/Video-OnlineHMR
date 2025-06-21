@@ -9,7 +9,7 @@ from typing import Optional, Dict, List, Tuple
 from lib.core import constants
 
 
-from freq_motion import plot_spectrogram
+from freq_motion import plot_spectrogram, plot_amplitude
 
 def cal_spectrogram_similarity(gt_amp, pred_amp):
     # 1) MSE
@@ -114,6 +114,27 @@ def compute_similarity_transform(S1: torch.Tensor, S2: torch.Tensor) -> torch.Te
 
     return S1_hat.permute(0, 2, 1)
 
+
+def add_noise_to_seq(motion_seq, num_frames=2, random=True):
+    # predefined Gaussian noise hyperparameters
+    mean = 0.0
+    std = 0.1
+    noised_motion = motion_seq.clone()
+    T, J, D = motion_seq.shape  # motion_seq 是 torch.Tensor，形状 (T, J, D)
+
+    if random:
+        torch.manual_seed(42)
+        frames_to_noise = torch.randperm(T)[:num_frames]
+        print("noise", frames_to_noise)
+
+        for frame in frames_to_noise:
+            noise = torch.randn(J, D, device=motion_seq.device) * std + mean
+            noised_motion[frame] += noise
+
+    return noised_motion
+
+
+
 def reconstruction_error(S1, S2) -> np.array:
     """
     Computes the mean Euclidean distance of 2 set of points S1, S2 after performing Procrustes alignment.
@@ -172,6 +193,8 @@ class Evaluator:
         self.valid_range = (1,1)
         self.chunk_size = 16
 
+        self.visualize_spec = True
+
 
     def __call__(self, gt_keypoints_3d, pred_keypoints_3d, dataset='3dpw', 
                 gt_verts=None, pred_verts=None):
@@ -190,17 +213,24 @@ class Evaluator:
         gt_valid, pred_valid = self.get_valid_joints(gt_keypoints_3d, 
                                                      pred_keypoints_3d, 
                                                      dataset)
-        # 48, 24, 3 --> 16, 24, 3
+        # 48, 24, 3 --> 16, 24, 3 (T, J, 3)
         gt_valid = select_valid(gt_valid, self.valid_range)
         pred_valid = select_valid(pred_valid, self.valid_range)
 
-        gt_amplitude = plot_spectrogram(gt_valid, sr=30*24, save_name="vis_GT.png")
-        pred_amplitude = plot_spectrogram(pred_valid, sr=30*24, save_name="vis_Pred.png")
+        if self.visualize_spec: # one time for each validation pass
+            gtnoise_amplitude = plot_spectrogram(add_noise_to_seq(gt_valid), sr=30*24, save_name="vis_GTnoised.png")
 
-        cal_spectrogram_similarity(gt_amplitude, pred_amplitude)
-        """e.g. spectrogram similarity -- MSE⬇️:0.4421258568763733, LSD⬇️:5.611983776092529, CORR⬆️:0.9915153980255127"""
+            gt_amplitude = plot_spectrogram(gt_valid, sr=30*24, save_name="vis_GT.png")
+            pred_amplitude = plot_spectrogram(pred_valid, sr=30*24, save_name="vis_Pred.png")
+
+            plot_amplitude(gt_amplitude-pred_amplitude, save_name="gt-pred.png")
+            plot_amplitude(gt_amplitude-gtnoise_amplitude, save_name="gt-noise.png")
+
+            cal_spectrogram_similarity(gt_amplitude, pred_amplitude)
+            cal_spectrogram_similarity(gtnoise_amplitude, pred_amplitude)
+            self.visualize_spec = False
         
-        batch_size = self.chunk_size # only count the current frame
+        batch_size = self.chunk_size # NOTE(yiwen) only count the current frame (stacked 16)
         # Compute joint errors
         mpjpe, re = eval_pose(pred_valid, gt_valid) # only pass current frame to eval pose
 
@@ -212,7 +242,6 @@ class Evaluator:
             self.pve[self.counter:self.counter+batch_size] = pve * 1000
 
         if self.seq_len is not None:
-            # NOTE(yiwen) if prev+curr, then avg(prev 16 accel, curr 16 accel)
             gt = gt_keypoints_3d.reshape(self.chunk_size, -1, num_j, 3).cpu()[:,1:2].reshape(-1, num_j, 3) # 2, 16, 24, 3
             pred = pred_keypoints_3d.reshape(self.chunk_size, -1, num_j, 3).cpu()[:,1:2].reshape(-1, num_j, 3)
             acc = 0 # NOTE(yiwen) originally calculate the acc error in each window
