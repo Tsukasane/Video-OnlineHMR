@@ -76,7 +76,7 @@ class HMR_VIMO(nn.Module):
         # backbone
         with autocast('cuda'):
             feature = self.backbone(image[:,:,:,32:-32]) # pass through vit
-            feature = feature.float() # 128, 1280, w=16, h=12 NOTE(yiwen) image feature of each patch/frame
+            feature = feature.float() # 128, 1280, h=16, w=12 NOTE(yiwen) image feature of each patch/frame
 
         # space-time module
         if self.st_module is not None:
@@ -144,7 +144,7 @@ class HMR_VIMO(nn.Module):
 
         frame = frame[valid]
         boxes = boxes[valid]
-        frame_chunks, boxes_chunks = parse_chunks(frame, boxes, min_len=16)
+        frame_chunks, boxes_chunks = parse_chunks(frame, boxes, min_len=3)
 
         if len(frame_chunks) == 0:
             return
@@ -194,39 +194,43 @@ class HMR_VIMO(nn.Module):
             item = db[i]
             items.append(item)
 
-            if len(items) < 16:
+            if len(items) < self.seq_len:
                 continue
-            elif len(items) == 16:
+            elif len(items) == self.seq_len:
                 batch = default_collate(items)
-            else:
-                items.pop(0)
-                batch = default_collate(items)
+            else: # len(items) > self.seq_len
+                items.pop(0) # first in first out
+                batch = default_collate(items) # sliding window step=1
 
+            # each batch is a three-frames window
             with torch.no_grad():
                 batch = {k: v.to(device) for k, v in batch.items() if type(v)==torch.Tensor}
-                out, _ = self.forward(batch)
+                # batch.keys() 'img', 'img_idx', 'scale', 'center', 'img_focal', 'img_center'
 
-            if out['pred_cam'].shape[0] == 3: # prev+curr+futureAdd commentMore actions
-                # NOTE(yiwen) we only use the estimation of current frame
-                out = {k:v[1:-1] for k,v in out.items()}
-
-            elif out['pred_cam'].shape[0] == 2: # prev+currAdd commentMore actions
-                out = {k:v[1:] for k,v in out.items()}
-            # if len(db) == 16:
-            #     out = {k:v for k,v in out.items()}
-            # elif i == 15:
-            #     out = {k:v[:9] for k,v in out.items()}
-            # elif i == len(db) - 1:
-            #     out = {k:v[8:] for k,v in out.items()}
-            # else:
-            #     out = {k:v[[8]] for k,v in out.items()}
+                # default valid_range = (0,2)
+                print(f"debug -- {batch['img_idx']}")
+                out, _ = self.forward(batch) 
+                # out.keys() 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
                 
+                if out['pred_cam'].shape[0] == 3: # prev+curr+future
+                # NOTE(yiwen) we only use the estimation of current frame
+                    out = {k:v[1:-1] for k,v in out.items()}
+
+                elif out['pred_cam'].shape[0] == 2: # prev+curr
+                    out = {k:v[1:] for k,v in out.items()}
+
             pred_cam.append(out['pred_cam'].cpu())
             pred_pose.append(out['pred_pose'].cpu())
             pred_shape.append(out['pred_shape'].cpu())
             pred_rotmat.append(out['pred_rotmat'].cpu())
             pred_trans.append(out['trans_full'].cpu())
 
+            # if i==0: # padding the first and the last, since sliding window cannot process the first and last frame of a sequence
+            #     pred_cam.append(out['pred_cam'].cpu())
+            #     pred_pose.append(out['pred_pose'].cpu())
+            #     pred_shape.append(out['pred_shape'].cpu())
+            #     pred_rotmat.append(out['pred_rotmat'].cpu())
+            #     pred_trans.append(out['trans_full'].cpu())
 
         results = {'pred_cam': torch.cat(pred_cam),
                 'pred_pose': torch.cat(pred_pose),

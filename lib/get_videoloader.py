@@ -24,6 +24,9 @@ def get_dataloaders(cfg=None):
     print('Datasets:', dataset_list)
     print('Partition:', partition)
 
+    import pdb
+    pdb.set_trace()
+    
     train = MixedVidDataset(dataset_list, partition, is_train=True, use_augmentation=True, 
                             normalization=True, cropped=True, crop_size=crop_size, 
                             seqlen=seqlen, stride=stride)

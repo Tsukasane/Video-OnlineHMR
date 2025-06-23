@@ -6,10 +6,10 @@ SEED_VALUE: 0
 IMG_RES: 256
 
 DATASET:
-  LIST: ['3dpw_vid', 'h36m_vid'] # NOTE(yiwen) temp debugging
-  PARTITION: [0.5, 0.5]
-  # LIST: ['3dpw_vid', 'h36m_vid', 'bedlam_vid']
-  # PARTITION: [0.165, 0.165, 0.67]
+  # LIST: ['3dpw_vid', 'h36m_vid'] # NOTE(yiwen) temp debugging
+  # PARTITION: [0.5, 0.5]
+  LIST: ['3dpw_vid', 'h36m_vid', 'bedlam_vid']
+  PARTITION: [0.165, 0.165, 0.67]
   SEQ_LEN: 3
   TEST: 'emdb_1'
 
@@ -54,6 +54,6 @@ MODEL:
   VALID_RANGE: (0,2)
 
 
-EXP_NAME: 'tram_3f' # shorter temporal expansion dims
+EXP_NAME: 'tram_3f_3datasets' # shorter temporal expansion dims
 COMMENT:
   'Default configs.'

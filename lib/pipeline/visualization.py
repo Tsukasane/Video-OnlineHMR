@@ -57,6 +57,9 @@ def visualize_tram(seq_folder, floor_scale=2, bin_size=-1, max_faces_per_bin=300
         pred_vert = pred.vertices
         pred_j3d = pred.joints[:, :24]
 
+        switch = world_cam_R[frame].shape[0] - pred_vert.shape[0]
+        frame = frame[:-switch]
+        
         cam_r = world_cam_R[frame]
         cam_t = world_cam_T[frame]
 
