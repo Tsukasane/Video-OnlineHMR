@@ -472,11 +472,18 @@ class VideoDataset(Dataset):
 
 
     def split_into_chunks(self, vid_names, seqlen, stride):
+        """
+        Args:
+            - vid_names(nparray): the corresponding name of each video frame
+            - group(nparray): the index of first frame for each video
+            - indices(list): len = videonum, each element --> indexes belongs to each video
+        """
         video_names, group = np.unique(vid_names, return_index=True)
         perm = np.argsort(group)
         video_names, group = video_names[perm], group[perm]
+        indices = np.split(np.arange(0, vid_names.shape[0]), group[1:]) # segment video frames according to different videos
 
-        indices = np.split(np.arange(0, vid_names.shape[0]), group[1:])
+        # NOTE(yiwen) already marked the invalid images (e.g. black due to fail in detecting bbox) in annotations
         if '3dpw' in self.dataset:
             invalid = self.detect_invalid_section()
         elif 'emdb' in self.dataset:
@@ -491,9 +498,9 @@ class VideoDataset(Dataset):
 
         video_start_end_indices = []
 
-        for idx in range(len(video_names)):
+        for idx in range(len(video_names)): # process each video one by one
             indexes = indices[idx]
-            if indexes.shape[0] < seqlen:
+            if indexes.shape[0] < seqlen: # video too short
                 continue
 
             if idx == len(video_names)-1:
@@ -508,10 +515,10 @@ class VideoDataset(Dataset):
                 chunks = view_as_windows(indexes, (seqlen,), step=1)
                 chunks_invalid = view_as_windows(indexes_invalid, (seqlen,), step=1)
             
-            chunks_valid = chunks[chunks_invalid.sum(axis=-1)==0]
+            chunks_valid = chunks[chunks_invalid.sum(axis=-1)==0] # if all frames in one chunk is valid
             
             start_finish = chunks_valid[:, (0, -1)].tolist()
-            video_start_end_indices += start_finish
+            video_start_end_indices += start_finish # TODO(yiwen) check whether the video start-end have black images
 
         return video_start_end_indices, group
             

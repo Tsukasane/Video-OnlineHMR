@@ -1,17 +1,17 @@
 LOGDIR: ''
 DEVICE: 'cuda'
 OUTPUT_DIR: 'results'
-NUM_WORKERS: 15
+NUM_WORKERS: 0 # 15
 SEED_VALUE: 0
 IMG_RES: 256
 
 DATASET:
-  # LIST: ['3dpw_vid', 'h36m_vid'] # NOTE(yiwen) temp debugging
-  # PARTITION: [0.5, 0.5]
-  LIST: ['3dpw_vid', 'h36m_vid', 'bedlam_vid']
-  PARTITION: [0.165, 0.165, 0.67]
+  LIST: ['3dpw_vid', 'h36m_vid'] # NOTE(yiwen) temp debugging
+  PARTITION: [0.5, 0.5]
+  # LIST: ['3dpw_vid', 'h36m_vid', 'bedlam_vid']
+  # PARTITION: [0.165, 0.165, 0.67]
   SEQ_LEN: 3
-  TEST: 'emdb_1'
+  TEST: '3dpw_vid_test' #'emdb_1'
 
 LOSS:
   KPT2D: 5.0
@@ -54,7 +54,7 @@ MODEL:
   VALID_RANGE: (0,2)
 
 
-EXP_NAME: 'onlineTRAM_3datasets' # shorter temporal expansion dims
+EXP_NAME: 'test_debug' # shorter temporal expansion dims
 COMMENT:
   'Default configs.'
 

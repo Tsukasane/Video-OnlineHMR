@@ -2,13 +2,23 @@
 
 
 # TODOs
-- the step in 16 frames setting and 3 frames setting are different, 有warmup之类的config是以step为单位定义的
+- The training data are in format of crop and annotations, are they still a temporal sequence? (or more like spatial offset of adjacent ids)
+- why they store the black image
+- bbox is kept at the center of the video
+- how they get the annotation (cropping)
+- we cannot make sure the adjacent (16+2) frames are from the same video crop
+- not fully sequential because it is bbox centric.
+
+
+- the step in 16 frames setting and 3 frames setting are different, 有warmup之类的config是以step为单位定义的，另外evaluation按照step来算的话太频繁了一点
+- achieve the best performance in the early epoch
 - [ ] 单个frame作为transformer的一支输入的话，还需不需要加positional encoding(原本是加在T维度上)
 - [ ] architecture design for online parts
 - [ ] single joint visualization
 
 
 # Findings
+* TRAM2f and TRAM3f only has small performance gap. The mean difference between TRAM and onlineTRAM is the SA/CA. I am worrying about the black image in bedlam dataset. (works ok when only using the smaller datasets.)
 * the author has mentioned about the black image cropping in their supplementary material.
 * compare tram_online_v524 and retrain_online_v1, longer temporal expansion leads to smaller accer. 对前两个指标的影响基本可以忽略不计，增加了计算量（balance）,不用再加了
 * pred 3 (didn't change architecture, i.e. the head dim)，loss ablation on prev / prev + curr / prev + curr + future
@@ -22,7 +32,7 @@ Run the following scripts **sequentially**. All results will be saved in a folde
 
 1. Run Masked Droid SLAM (also detect+track humans in this step)
     ```bash
-    python scripts/estimate_camera.py --video "./example_video000088_trampcf.mp4"
+    python scripts/estimate_camera.py --video "./example_video1.mov"
     # You can indicate if the camera is static. The algorithm will try to catch it as well.
     python scripts/estimate_camera.py --video "./another_video.mov" --static_camera
     ```
@@ -31,12 +41,12 @@ Run the following scripts **sequentially**. All results will be saved in a folde
     ```bash
     # modify #Line45 checkpoint path
     # modify valid_range in config ./lib/models/configs/config_vimo.yaml
-    python scripts/estimate_humans.py --video "./example_video000088_trampcf.mp4"
+    python scripts/estimate_humans.py --video "./example_video1.mov"
     ```
 
 3. Put everything together. Render the output video.
     ```bash
-    python scripts/visualize_tram.py --video "./example_video000088_trampcf.mp4"
+    python scripts/visualize_tram.py --video "./example_video1.mov"
     ```
 
 ## Preparation

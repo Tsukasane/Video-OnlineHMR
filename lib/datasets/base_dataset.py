@@ -91,7 +91,7 @@ class BaseDataset(Dataset):
         # Process image
         invalid = self.invalid[index]
         if invalid:
-            img = np.zeros([256, 256, 3]).astype('uint8')
+            img = np.zeros([256, 256, 3]).astype('uint8') # TODO(yiwen) check why store the black image here
         else:
             try:
                 img = self.rgb_processing(img, center, scale)

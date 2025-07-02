@@ -140,11 +140,12 @@ class Trainer(BaseTrainer):
             with torch.no_grad():
                 # batch.keys() ['img_idx', 'img_focal', 'img_center', 'img', 'pose', 'betas', 'pose_3d', 'gt_verts', 'keypoints', 'scale', 'center', 'has_smpl', 'has_pose_3d']
                 out, _ = model(batch, self.valid_range, iters=update_iter) # 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
-                
-                if '3dpw' in db.dataset:
+
+                if '3dpw' in db.dataset: # TODO(yiwen) temporally use 3dpw as evalset to see vertices performance
                     mode = '3dpw'
                     smpl_out = model.smpl.query(out) # input ['pred_rotmat'] ['pred_shape']
-                    pred_vertices = smpl_out.vertices
+                    pred_vertices = smpl_out.vertices # 48, 6890, 3
+                    gt_vertices = batch['gt_verts']
                     J_regressor_batch = J_regressor[None, :].expand(pred_vertices.shape[0], -1, -1)
 
                     pred_keypoints_3d = torch.matmul(J_regressor_batch, pred_vertices)
@@ -161,7 +162,8 @@ class Trainer(BaseTrainer):
                     
             # evaluation
             gt_keypoints_3d = select_valid(gt_keypoints_3d, self.valid_range)
-            evaluator(gt_keypoints_3d, pred_keypoints_3d, mode)
+            # TODO(yiwen) get vertices from joint
+            evaluator(gt_keypoints_3d, pred_keypoints_3d, mode, gt_vertices, pred_vertices)
 
         re = evaluator.re[:evaluator.counter].mean()
         mpjpe = evaluator.mpjpe[:evaluator.counter].mean()

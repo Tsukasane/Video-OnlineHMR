@@ -194,6 +194,7 @@ class Evaluator:
         self.chunk_size = 16
 
         self.visualize_spec = True
+        self.visualize_verticesspec = True
 
 
     def __call__(self, gt_keypoints_3d, pred_keypoints_3d, dataset='3dpw', 
@@ -203,6 +204,8 @@ class Evaluator:
         Args:
             - gt_keypoints_3d(tensor): bs * 3, 24, 4
             - pred_keypoints_3d(tensor): bs * 3, 24, 3
+            - gt_verts: bs * 3, 6890, 3
+            - pred_verts: bs * 3, 6890, 3
         '''
         # batch_size = gt_keypoints_3d.shape[0] # 128, 24, 4
 
@@ -217,9 +220,27 @@ class Evaluator:
         gt_valid = select_valid(gt_valid, self.valid_range)
         pred_valid = select_valid(pred_valid, self.valid_range)
 
+        gt_vertvalid = select_valid(gt_verts, self.valid_range)
+        pred_vertvalid = select_valid(pred_verts, self.valid_range)
+
+        # NOTE(yiwen) fps=30
+        if self.visualize_verticesspec: # one time for each validation pass
+            # gt_valid: B, 6890, 3
+            gt_amplitude = plot_spectrogram(gt_vertvalid, sr=100, save_name="vis_verticesGT3.png") # NOTE(yiwen) decide the sr
+            pred_amplitude = plot_spectrogram(pred_vertvalid, sr=100, save_name="vis_verticesPred3.png")
+
+            plot_amplitude(gt_amplitude-pred_amplitude, save_name="gt-predvertices3.png")
+
+            cal_spectrogram_similarity(gt_amplitude, pred_amplitude)
+            self.visualize_verticesspec = False
+
+        # TODO(yiwen) seperate vertices according to different body parts
+
+        # NOTE(yiwen) fps=30
         if self.visualize_spec: # one time for each validation pass
             gtnoise_amplitude = plot_spectrogram(add_noise_to_seq(gt_valid), sr=30*24, save_name="vis_GTnoised.png")
 
+            # gt_valid: B, 24, 3
             gt_amplitude = plot_spectrogram(gt_valid, sr=30*24, save_name="vis_GT.png")
             pred_amplitude = plot_spectrogram(pred_valid, sr=30*24, save_name="vis_Pred.png")
 
@@ -237,6 +258,9 @@ class Evaluator:
         self.mpjpe[self.counter:self.counter+batch_size] = mpjpe
         self.re[self.counter:self.counter+batch_size] = re
         
+        import pdb
+        pdb.set_trace() # TODO(yiwen) vertices to spectrogram
+
         if gt_verts is not None and pred_verts is not None:
             pve = (pred_verts - gt_verts).norm(dim=-1).mean(dim=-1).cpu().numpy()
             self.pve[self.counter:self.counter+batch_size] = pve * 1000
