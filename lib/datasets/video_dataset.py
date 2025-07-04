@@ -492,7 +492,7 @@ class VideoDataset(Dataset):
             invalid = self.data['invalid']
         elif 'bedlam_vid' in self.dataset:
             invalid = self.data['invalid']
-            self.invalid = invalid
+            self.invalid = invalid # NOTE(yiwen) this self.invalid attribute is only for bedlam video, which is stored in the annotation and corresponds to black images
         else:
             invalid = np.zeros(len(self.imgname))
 
@@ -503,22 +503,20 @@ class VideoDataset(Dataset):
             if indexes.shape[0] < seqlen: # video too short
                 continue
 
+            # get all invalid indexes in one video
             if idx == len(video_names)-1:
                 indexes_invalid = invalid[group[idx]:]
             else:
                 indexes_invalid = invalid[group[idx]:group[idx+1]]
 
-            if self.is_train:
-                chunks = view_as_windows(indexes, (seqlen,), step=stride)
-                chunks_invalid = view_as_windows(indexes_invalid, (seqlen,), step=stride)
-            else: # NOTE(yiwen) iftest, each window len=3, step=1, total length=seqlen-2
-                chunks = view_as_windows(indexes, (seqlen,), step=1)
-                chunks_invalid = view_as_windows(indexes_invalid, (seqlen,), step=1)
+            # first split the big chunk, make sure each chunk is from the same video
+            chunks = view_as_windows(indexes, (seqlen,), step=stride)
+            chunks_invalid = view_as_windows(indexes_invalid, (seqlen,), step=stride)
             
             chunks_valid = chunks[chunks_invalid.sum(axis=-1)==0] # if all frames in one chunk is valid
             
-            start_finish = chunks_valid[:, (0, -1)].tolist()
-            video_start_end_indices += start_finish # TODO(yiwen) check whether the video start-end have black images
+            start_finish = chunks_valid[:, (0, -1)].tolist() # store the start and end of one chunk
+            video_start_end_indices += start_finish # NOTE(yiwen) this operation makes sure all windows used for training contains only valid frames
 
         return video_start_end_indices, group
             

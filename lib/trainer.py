@@ -12,6 +12,29 @@ def select_valid(batch_tensor, valid_range):
 
     return batch_tensor
 
+def move_last_dim_to_second(tensor: torch.Tensor):
+    """
+    Move the last dimension to the second dimension.
+    """
+    dims = list(range(tensor.dim()))
+    last = dims.pop()       # remove -1 (last)
+    dims.insert(1, last)    # insert last dim into second position
+    return tensor.permute(*dims)
+
+
+def slice_to_small_chunk(ori_chunk, chunk_len=3, stride=1):
+    """
+    Slice big chunk (26,...) from the same video sequence to small chunks (B*3,...), B=24
+    """
+    windows = ori_chunk.unfold(dimension=0, size=chunk_len, step=stride)
+    
+    windows = move_last_dim_to_second(windows)
+    windows = windows.flatten(0,1)
+
+    # print(f'debug -- windows.shape {windows.shape}')
+
+    return windows
+
 class Trainer(BaseTrainer):
 
     def _init_fn(self):
@@ -25,13 +48,17 @@ class Trainer(BaseTrainer):
 
         self.valid_range = self.cfg.MODEL.VALID_RANGE # prev 0, curr 1, future 2
 
-        for i, batch in enumerate(tqdm(self.train_loader, desc="Computing batch")):
+        for i, batch in enumerate(tqdm(self.train_loader, desc="Computing batch")): # how to ignore the train.invalid elements
 
-            # Transfer to GPU
-            # batch = self.train_loader.batch_normalize_img(batch)
+            # 72, 24, 4     B*window_size, 24, 4'
+            # NOTE(yiwen) modify the training dataloader
+            batch = {k: v.flatten(0, 1) for k, v in batch.items() if type(v)==torch.Tensor} # TODO(yiwen) check why flatten here
+            # ['img_idx', 'img_focal', 'img_center', 'img', 'pose', 'betas', 'pose_3d', 'keypoints', 'scale', 'center', 'has_smpl', 'has_pose_3d']
+            # [26, 1]  [26]  [26, 2]  [26, 3, 256, 256]  [26, 72]  [26, 10]  [26, 24, 4]  [26, 49, 3]  [26]  [26, 2]  [26]  [26]
 
-            # b, t --> bt
-            batch = {k: v.to(self.device).flatten(0, 1) for k, v in batch.items() if type(v)==torch.Tensor}
+            batch = {k: slice_to_small_chunk(v) for k, v in batch.items()} # NOTE(yiwen) first do other process, then to(device)
+            batch = {k: v.to(self.device) for k, v in batch.items()}
+
             batch['beta_weight'] = self.cfg.TRAIN.SMPL_BETA
             batch['smpl'] = self.model.smpl
 
@@ -131,10 +158,10 @@ class Trainer(BaseTrainer):
 
         for i, batch in enumerate(loader):
             # batch = loader.batch_normalize_img(batch)
+            # NOTE(yiwen) no need to modify the batch in inference
             batch = {k: v.to(self.device).flatten(0, 1) for k, v in batch.items() if type(v)==torch.Tensor}
-
             # gt joints
-            gt_keypoints_3d = batch['pose_3d'] # [bt, 24, 4]
+            gt_keypoints_3d = batch['pose_3d'] # [bt, 24, 4] # TODO(yiwen) seperate video in validation
 
             # prediction
             with torch.no_grad():

@@ -100,7 +100,7 @@ class temporal_attention_sw(nn.Module):
         self.spa_expansion_layer = nn.Linear(self.out_h*self.out_w, 192) #v4
 
         # motion
-        self.expanded_tem_mdim = 24 # NOTE(yiwen) tune para here12 15 18 24
+        self.expanded_tem_mdim = 6 # NOTE(yiwen) tune para here12 15 18 24
         self.tem_expansion_layer1 = nn.Linear(self.frame_chunk_size, self.expanded_tem_mdim)
         self.tem_expansion_layer2 = nn.Linear(self.frame_chunk_size, self.expanded_tem_mdim)
         self.tem_compact_layer1 = nn.Linear(self.expanded_tem_mdim, 3*self.frame_chunk_size)
@@ -127,17 +127,23 @@ class temporal_attention_sw(nn.Module):
         '''
 
         if not self.is_img: # for SMPL head
-            prev_frame = x[:,0:1,:].permute(0,2,1)
-            curr_frame = x[:,1:2,:].permute(0,2,1)
-            future_frame = x[:,2:3,:]
+            # prev_frame = x[:,0:1,:].permute(0,2,1)
+            # curr_frame = x[:,1:2,:].permute(0,2,1)
+            # future_frame = x[:,2:3,:]
 
-            px = self.tem_expansion_layer1(prev_frame).permute(0,2,1)
-            cx = self.tem_expansion_layer2(curr_frame).permute(0,2,1)
+            px = self.tem_expansion_layer1(x[:,0:1,:].permute(0,2,1)).permute(0,2,1)
+            cx = self.tem_expansion_layer2(x[:,1:2,:].permute(0,2,1)).permute(0,2,1)
             # x = x.permute(1,0,2)  # (b,t,c) -> (t,b,c)
-            
+            del x
+
             ph = self.l11(px) # 4608, 16, 512
             ch = self.l12(cx)
 
+            del px
+            del cx
+
+            print(f'debug -- ph.shape {ph.shape}')
+            
             # TODO(yiwen) check positional encoding after linear
             ph = self.pos_drop(ph)
             transformer_output = self.naive_transfomer(ch, ph)
@@ -146,16 +152,22 @@ class temporal_attention_sw(nn.Module):
             out = self.tem_compact_layer2(h.permute(0,2,1)).permute(0,2,1) # NOTE(yiwen) only the current
 
         else: # for img feature
-            prev_frame = x[:,0:1,:].permute(0,2,1)
-            curr_frame = x[:,1:2,:].permute(0,2,1)
-            future_frame = x[:,2:3,:]
+            # prev_frame = x[:,0:1,:].permute(0,2,1)
+            # curr_frame = x[:,1:2,:].permute(0,2,1)
+            # future_frame = x[:,2:3,:]
 
-            px = self.tem_expansion_layer1(prev_frame).permute(0,2,1)
-            cx = self.tem_expansion_layer2(curr_frame).permute(0,2,1)
+            px = self.tem_expansion_layer1(x[:,0:1,:].permute(0,2,1)).permute(0,2,1)
+            cx = self.tem_expansion_layer2(x[:,1:2,:].permute(0,2,1)).permute(0,2,1)
             # x = x.permute(1,0,2)  # (b,t,c) -> (t,b,c)
-            
+            del x
+
             ph = self.l11(px) # 4608, 16, 512
             ch = self.l12(cx)
+
+            del px
+            del cx
+
+            print(f'debug -- ph.shape {ph.shape}')
 
             # TODO(yiwen) check positional encodding after linear
             ph = self.pos_drop(ph)

@@ -15,6 +15,8 @@ from lib.trainer import Trainer
 from lib.get_videoloader import get_dataloaders
 from lib.models.hmr_vimo import HMR_VIMO
 
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 def main(cfg):
     if cfg.SEED_VALUE >= 0:

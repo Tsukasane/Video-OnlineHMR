@@ -220,14 +220,14 @@ class Evaluator:
         gt_valid = select_valid(gt_valid, self.valid_range)
         pred_valid = select_valid(pred_valid, self.valid_range)
 
-        gt_vertvalid = select_valid(gt_verts, self.valid_range)
-        pred_vertvalid = select_valid(pred_verts, self.valid_range)
+        gt_verts = select_valid(gt_verts, self.valid_range)
+        pred_verts = select_valid(pred_verts, self.valid_range)
 
         # NOTE(yiwen) fps=30
         if self.visualize_verticesspec: # one time for each validation pass
             # gt_valid: B, 6890, 3
-            gt_amplitude = plot_spectrogram(gt_vertvalid, sr=100, save_name="vis_verticesGT3.png") # NOTE(yiwen) decide the sr
-            pred_amplitude = plot_spectrogram(pred_vertvalid, sr=100, save_name="vis_verticesPred3.png")
+            gt_amplitude = plot_spectrogram(gt_verts, sr=100, save_name="vis_verticesGT3.png") # NOTE(yiwen) decide the sr
+            pred_amplitude = plot_spectrogram(pred_verts, sr=100, save_name="vis_verticesPred3.png")
 
             plot_amplitude(gt_amplitude-pred_amplitude, save_name="gt-predvertices3.png")
 
@@ -257,9 +257,7 @@ class Evaluator:
 
         self.mpjpe[self.counter:self.counter+batch_size] = mpjpe
         self.re[self.counter:self.counter+batch_size] = re
-        
-        import pdb
-        pdb.set_trace() # TODO(yiwen) vertices to spectrogram
+
 
         if gt_verts is not None and pred_verts is not None:
             pve = (pred_verts - gt_verts).norm(dim=-1).mean(dim=-1).cpu().numpy()

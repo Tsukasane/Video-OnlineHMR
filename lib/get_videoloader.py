@@ -9,31 +9,66 @@ def get_dataloaders(cfg=None):
     num_workers = cfg.NUM_WORKERS
     crop_size = cfg.IMG_RES
     dataset_list = cfg.DATASET.LIST
-    seqlen = cfg.DATASET.SEQ_LEN
-    stride = cfg.DATASET.STRIDE
     valid_set = cfg.DATASET.TEST
     partition = cfg.DATASET.PARTITION
+
+    train_seqlen = train_bs + 2 # so it is bs*windows
+    train_stride = train_seqlen
+    stride = cfg.DATASET.STRIDE
 
     test_bs = cfg.TEST.BATCH_SIZE
 
 
     print('Num of data loading workers:', num_workers)
-    print('Sequence length:', seqlen)
-    print('Sequence stride:', stride)
+    print('Sequence length:', train_seqlen)
+    print('Sequence stride:', train_stride)
 
     print('Datasets:', dataset_list)
     print('Partition:', partition)
 
-    train = MixedVidDataset(dataset_list, partition, is_train=True, use_augmentation=True, 
+    train = MixedVidDataset(dataset_list, partition, is_train=True, use_augmentation=True,
                             normalization=True, cropped=True, crop_size=crop_size, 
-                            seqlen=seqlen, stride=stride)
-    train_loader = CheckpointDataLoader(train, shuffle=True, batch_size=train_bs, num_workers=num_workers)
-
-    # NOTE(yiwen) ori hard code in test & test_loader
+                            seqlen=train_seqlen, stride=train_stride) 
+                            # seqlen=stride should be batch_size+2, set the real batch_size=1
+                            # then reshape the input to B, window_size=3, ...
+                            # --> make sure the frames are from continous seqs
+    train_loader = CheckpointDataLoader(train, shuffle=True, batch_size=1, num_workers=num_workers)
+    
+    # NOTE(yiwen) iftest, each window len=3, step=1, total length=seqlen-2
     test = VideoDataset(valid_set, is_train=False, use_augmentation=False, 
-                    normalization=True, cropped=True, crop_size=crop_size, seqlen=seqlen, stride=seqlen) 
+                    normalization=True, cropped=True, crop_size=crop_size, seqlen=3, stride=1) 
     test_loader = DataLoader(test, batch_size=test_bs, shuffle=False, num_workers=0, drop_last=True)
 
+    # ----------- debug ----------- #
+    # import matplotlib.pyplot as plt
+    # import torch
+    # mean = torch.tensor([0.485, 0.456, 0.406]) # imagenet
+    # std = torch.tensor([0.229, 0.224, 0.225])
+
+    # for g in range(train_bs):
+    #     batch = train[g]
+    #     img = batch['img']
+
+    #     kpts = batch['keypoints'][:, -24:].clone() # batch['keypoints'].shape  N, J, D ([3, 49, 3]) TODO(yiwen) check what is the previous 25
+    #     valid = kpts[:,:,-1] > 0 # confidence > 0
+    #     kpts = (kpts+1) * 256 / 2 # NOTE(yiwen) from range [-1,1] to real coords in 256*256 image
+    #     kpts[~valid] = 0
+
+    #     plt.rcParams['figure.figsize'] = 8, 5
+    #     fig, axes = plt.subplots(1, 3)
+
+    #     for i in range(seqlen):
+    #         ax = axes[i%3]
+    #         img_denorm = img[i] * std[:, None, None] + mean[:, None, None]
+    #         ax.imshow(img_denorm.permute(1, 2, 0).clip(0, 1).numpy()) # stride=2
+    #         ax.axis('off')
+    #         ax.scatter(kpts[i,:,0], kpts[i,:,1], s=10)
+    #     fig.tight_layout()
+    #     plt.savefig(f'noaug_bedlambs{g}.png')
+    #     plt.close()
+    # ----------- debug ----------- #
+
+    
     return [train_loader, test_loader]
 
 

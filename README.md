@@ -2,14 +2,11 @@
 
 
 # TODOs
-- The training data are in format of crop and annotations, are they still a temporal sequence? (or more like spatial offset of adjacent ids)
-- why they store the black image
+- 在没有memory时，BEDLAM 作为 trainset 每个连续 sequence 短一点没关系，因为训练时只依赖三帧窗口内部，三种对比方法 validation set 是一致的
+- Black image corresponds to 'invalid' label in annotations, and will be aborted in video_dataset
 - bbox is kept at the center of the video
-- how they get the annotation (cropping)
-- we cannot make sure the adjacent (16+2) frames are from the same video crop
-- not fully sequential because it is bbox centric.
-
-
+- [ ] validation set 从一个video到下一个video的连接处 在 jittering eval的时候需要分开
+- [ ] 如果一个 batch 里面的 chunks 是跨越了一个video segment的末尾和另一个video semgent的开始，在建立单个patch的T关系的时候好像会有点问题，TRAM本身没这个问题因为一个chunk都会来自同一个video，只出现在试图建立 batch 内 chunk 之间的关系时
 - the step in 16 frames setting and 3 frames setting are different, 有warmup之类的config是以step为单位定义的，另外evaluation按照step来算的话太频繁了一点
 - achieve the best performance in the early epoch
 - [ ] 单个frame作为transformer的一支输入的话，还需不需要加positional encoding(原本是加在T维度上)
@@ -18,9 +15,7 @@
 
 
 # Findings
-* TRAM2f and TRAM3f only has small performance gap. The mean difference between TRAM and onlineTRAM is the SA/CA. I am worrying about the black image in bedlam dataset. (works ok when only using the smaller datasets.)
-* the author has mentioned about the black image cropping in their supplementary material.
-* compare tram_online_v524 and retrain_online_v1, longer temporal expansion leads to smaller accer. 对前两个指标的影响基本可以忽略不计，增加了计算量（balance）,不用再加了
+* TRAM2f and TRAM3f only has small performance gap. The mean difference between TRAM and onlineTRAM is the SA/CA, also the temporal expansion.
 * pred 3 (didn't change architecture, i.e. the head dim)，loss ablation on prev / prev + curr / prev + curr + future
 * TRAM 的结构对temporal的信息没有WHAM那么强的依赖性，没有贯穿始终的h0，所以改成3帧对效果的影响相对没有那么大
 * TRAM 原本的训练已经使用了sliding window的形式，16frames in 16 frames out

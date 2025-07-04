@@ -96,6 +96,7 @@ class HMR_VIMO(nn.Module):
                 - batch['scale'] # B*T
                 - batch['img_focal'] # B*T
                 - batch['img_center'] # B*T, 2
+            - valid_range: is for prev, curr, future ablation
         Returns:
             - out (dict)
                 - rotmat_preds (list) element shape B*T, 24, 3, 3
@@ -122,18 +123,27 @@ class HMR_VIMO(nn.Module):
             feature = self.backbone(image[:,:,:,32:-32]) # pass through vit
             feature = feature.float() # 128, 1280, w=16, h=12 NOTE(yiwen) image feature of each patch/frame
 
+        # TODO(yiwen) check why OOD in training here
         # space-time module
         if self.st_module is not None:
-            bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12)
-            feature = torch.cat([feature, bb], dim=1) #128, 1283, 16, 12 NOTE(yiwen) image + human bbox
+            bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12) # NOTE(yiwen) frame level
+            feature = torch.cat([feature, bb], dim=1) #128, 1283, 16, 12 NOTE(yiwen) image + human bbox frame level
 
-            # NOTE(yiwen) this t is not the real t, but the b*t
-            feature = einops.rearrange(feature, '(b t) c h w -> (b h w) t c', t=self.seq_len) # b=8 h=16 w=12 t=3 c=1283
-            
-            feature = self.st_module(feature) # 1536, 16, 1280
-            feature = einops.rearrange(feature, '(b h w) t c -> (b t) c h w', h=16, w=12) # 128, 1280, 16, 12
+            # NOTE(yiwen) this t is not the real t, but the b*t patch level
+            feature = einops.rearrange(feature, '(b t) c h w -> (b h w) t c', t=self.seq_len) # b=8 h=16 w=12 t=3 c=1283 
+            feature = self.st_module(feature) # 1536, 16, 1280 NOTE(yiwen) fuse the temporal info of each patch
+            feature = einops.rearrange(feature, '(b h w) t c -> (b t) c h w', h=16, w=12) # 128, 1280, 16, 12 NOTE(yiwen) reshape to frame level
 
-        # smpl_head: transformer + smpl
+        ''' TODO(yiwen)
+        memory usage: 14081.9443359375
+        image level memory: feature of previous window,
+            window should in sequential order also in training, step size = 1 
+                - pose memory: then can give the prediction of future frame in the last window (would also be the current frame in this window) 
+                               to be fused to context in this window
+                - image memory: 0,1 --> context, to be fused with 1,2 --> context
+        
+        '''
+        # smpl_head: transformer + smpl NOTE(yiwen) frame level feature estimate frame level smpl
         pred_pose, pred_shape, pred_cam = self.smpl_head(feature) # the predicted 6d may not be orthogonal.
 
         pred_shape = select_valid(pred_shape, valid_range)
@@ -142,7 +152,7 @@ class HMR_VIMO(nn.Module):
 
         # smpl motion module
         if self.motion_module is not None: # NOTE(yiwen) refine the predicted pose
-            bb = einops.rearrange(bbox_info, '(b t) c -> b t c', t=self.seq_len)
+            bb = einops.rearrange(bbox_info, '(b t) c -> b t c', t=self.seq_len) # NOTE frame level (no h,w this time)
             pred_pose = einops.rearrange(pred_pose, '(b t) c -> b t c', t=self.seq_len)
             pred_pose = torch.cat([pred_pose, bb], dim=2) # 24, 3, 147=144+3 pose + bbox
             pred_pose = self.motion_module(pred_pose) # 24, 3, 144
@@ -271,8 +281,6 @@ class HMR_VIMO(nn.Module):
                 batch = {k: v.to(device) for k, v in batch.items() if type(v)==torch.Tensor}
                 # batch.keys() 'img', 'img_idx', 'scale', 'center', 'img_focal', 'img_center'
 
-                # default valid_range = (0,2)
-                print(f"debug -- {batch['img_idx']}")
                 out, _ = self.forward(batch) 
                 # out.keys() 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
                 

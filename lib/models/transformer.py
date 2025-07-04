@@ -32,7 +32,7 @@ class CrossAttention(nn.Module):
         return self.out_proj(attn_output)
 
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model, n_heads, dim_feedforward=2048, dropout=0.1):
+    def __init__(self, d_model, n_heads, dim_feedforward=512, dropout=0.1):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
         self.cross_attn = CrossAttention(d_model, n_heads, dropout)
@@ -60,7 +60,7 @@ class TransformerBlock(nn.Module):
         return x
 
 class ShortWindowTransformer(nn.Module):
-    def __init__(self, d_model, n_heads, num_layers=6, dim_feedforward=2048, dropout=0.1):
+    def __init__(self, d_model, n_heads, num_layers=6, dim_feedforward=512, dropout=0.1):
         super().__init__()
         self.layers = nn.ModuleList([
             TransformerBlock(d_model, n_heads, dim_feedforward, dropout) for _ in range(num_layers)
