@@ -32,6 +32,7 @@ class HMR_VIMO(nn.Module):
         self.cfg = cfg
         self.crop_size = cfg.IMG_RES
         self.seq_len = cfg.DATASET.SEQ_LEN
+        self.chunk_size = 16
 
         # SMPL
         self.smpl = SMPL()      
@@ -71,7 +72,6 @@ class HMR_VIMO(nn.Module):
                                                     nlayer=nlayer,
                                                     is_img=False,
                                                     head_dim=head_dim)
-            
             # tram
             # self.motion_module = temporal_attention(in_dim=144+3, 
             #                                         out_dim=144,
@@ -107,7 +107,6 @@ class HMR_VIMO(nn.Module):
                 - trans_full (list) element shape B*T, 1, 3
         '''
 
-        # TODO(yiwen) create a new validation pass with sliding window step_size=1
         image  = batch['img'] # B*T, 3, 256, 256
         center = batch['center'] # B*T, 2
         scale  = batch['scale'] # B*T
@@ -123,17 +122,7 @@ class HMR_VIMO(nn.Module):
             feature = self.backbone(image[:,:,:,32:-32]) # pass through vit
             feature = feature.float() # 128, 1280, w=16, h=12 NOTE(yiwen) image feature of each patch/frame
 
-        # TODO(yiwen) check why OOD in training here
         # space-time module
-        if self.st_module is not None:
-            bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12) # NOTE(yiwen) frame level
-            feature = torch.cat([feature, bb], dim=1) #128, 1283, 16, 12 NOTE(yiwen) image + human bbox frame level
-
-            # NOTE(yiwen) this t is not the real t, but the b*t patch level
-            feature = einops.rearrange(feature, '(b t) c h w -> (b h w) t c', t=self.seq_len) # b=8 h=16 w=12 t=3 c=1283 
-            feature = self.st_module(feature) # 1536, 16, 1280 NOTE(yiwen) fuse the temporal info of each patch
-            feature = einops.rearrange(feature, '(b h w) t c -> (b t) c h w', h=16, w=12) # 128, 1280, 16, 12 NOTE(yiwen) reshape to frame level
-
         ''' TODO(yiwen)
         memory usage: 14081.9443359375
         image level memory: feature of previous window,
@@ -143,15 +132,26 @@ class HMR_VIMO(nn.Module):
                 - image memory: 0,1 --> context, to be fused with 1,2 --> context
         
         '''
-        # smpl_head: transformer + smpl NOTE(yiwen) frame level feature estimate frame level smpl
-        pred_pose, pred_shape, pred_cam = self.smpl_head(feature) # the predicted 6d may not be orthogonal.
+        # frame level
+        bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12) 
+        feature = torch.cat([feature, bb], dim=1) # B*3=48, 1283, 16, 12 NOTE(yiwen) image + human bbox
 
+        # patch level -->
+        feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c',b=1) # c=1283
+        feature = self.st_module(feature) # 1536, 16, 1280 NOTE(yiwen) fuse the temporal info of each patch
+
+        # reshape to frame level
+        feature = einops.rearrange(feature, '(b h w) t c -> (b t) c h w', h=16, w=12) # B, 1280, 16, 12 NOTE(yiwen) reshape to frame level
+
+        # frame level feature estimate frame level smpl
+        pred_pose, pred_shape, pred_cam = self.smpl_head(feature) #TODO(yiwen) use how many windows in training? 
+        
         pred_shape = select_valid(pred_shape, valid_range)
         pred_cam = select_valid(pred_cam, valid_range)
         pred_rotmat_0 = rot6d_to_rotmat(select_valid(pred_pose, valid_range)).reshape(-1, 24, 3, 3) # 72, 24, 3, 3
 
-        # smpl motion module
-        if self.motion_module is not None: # NOTE(yiwen) refine the predicted pose
+        # smpl motion module NOTE(yiwen) refine the predicted pose
+        if self.motion_module is not None:
             bb = einops.rearrange(bbox_info, '(b t) c -> b t c', t=self.seq_len) # NOTE frame level (no h,w this time)
             pred_pose = einops.rearrange(pred_pose, '(b t) c -> b t c', t=self.seq_len)
             pred_pose = torch.cat([pred_pose, bb], dim=2) # 24, 3, 147=144+3 pose + bbox
@@ -296,13 +296,6 @@ class HMR_VIMO(nn.Module):
             pred_shape.append(out['pred_shape'].cpu())
             pred_rotmat.append(out['pred_rotmat'].cpu())
             pred_trans.append(out['trans_full'].cpu())
-
-            # if i==0: # padding the first and the last, since sliding window cannot process the first and last frame of a sequence
-            #     pred_cam.append(out['pred_cam'].cpu())
-            #     pred_pose.append(out['pred_pose'].cpu())
-            #     pred_shape.append(out['pred_shape'].cpu())
-            #     pred_rotmat.append(out['pred_rotmat'].cpu())
-            #     pred_trans.append(out['trans_full'].cpu())
 
         results = {'pred_cam': torch.cat(pred_cam),
                 'pred_pose': torch.cat(pred_pose),

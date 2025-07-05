@@ -238,17 +238,17 @@ class Evaluator:
 
         # NOTE(yiwen) fps=30
         if self.visualize_spec: # one time for each validation pass
-            gtnoise_amplitude = plot_spectrogram(add_noise_to_seq(gt_valid), sr=30*24, save_name="vis_GTnoised.png")
+            # gtnoise_amplitude = plot_spectrogram(add_noise_to_seq(gt_valid), sr=30*24, save_name="vis_GTnoised.png")
 
             # gt_valid: B, 24, 3
             gt_amplitude = plot_spectrogram(gt_valid, sr=30*24, save_name="vis_GT.png")
             pred_amplitude = plot_spectrogram(pred_valid, sr=30*24, save_name="vis_Pred.png")
 
             plot_amplitude(gt_amplitude-pred_amplitude, save_name="gt-pred.png")
-            plot_amplitude(gt_amplitude-gtnoise_amplitude, save_name="gt-noise.png")
+            # plot_amplitude(gt_amplitude-gtnoise_amplitude, save_name="gt-noise.png")
 
             cal_spectrogram_similarity(gt_amplitude, pred_amplitude)
-            cal_spectrogram_similarity(gtnoise_amplitude, pred_amplitude)
+            # cal_spectrogram_similarity(gtnoise_amplitude, pred_amplitude)
             self.visualize_spec = False
         
         batch_size = self.chunk_size # NOTE(yiwen) only count the current frame (stacked 16)

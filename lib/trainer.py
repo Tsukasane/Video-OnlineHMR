@@ -48,6 +48,7 @@ class Trainer(BaseTrainer):
 
         self.valid_range = self.cfg.MODEL.VALID_RANGE # prev 0, curr 1, future 2
 
+        # TODO(yiwen) modify to batch start from training
         for i, batch in enumerate(tqdm(self.train_loader, desc="Computing batch")): # how to ignore the train.invalid elements
 
             # 72, 24, 4     B*window_size, 24, 4'

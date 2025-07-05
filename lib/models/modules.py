@@ -106,7 +106,7 @@ class temporal_attention_sw(nn.Module):
         self.tem_compact_layer1 = nn.Linear(self.expanded_tem_mdim, 3*self.frame_chunk_size)
         self.tem_compact_layer2 = nn.Linear(self.expanded_tem_mdim, head_dim)
 
-
+        self.feature_fusion = nn.Linear(2*hdim, hdim)
         self.pos_drop = nn.Dropout(0.15)
 
         TranLayer = nn.TransformerEncoderLayer(d_model=hdim, nhead=nhead, dim_feedforward=1024,
@@ -117,32 +117,30 @@ class temporal_attention_sw(nn.Module):
         nn.init.xavier_uniform_(self.l12.weight, gain=0.01)
         nn.init.xavier_uniform_(self.l2.weight, gain=0.01)
 
+        self.memory_num = 1 # NOTE(yiwen) fix memory length now
+
+        weight = 1.0 / self.memory_num
+        self.weight_list = [weight]
+
     def forward(self, x):
         '''
         Args:
-            - [Image] x: (bhw) t c  t=3
+            - [Image] x: (bt) (hw) c  t=3
             - 
         Returns:
             - [Image] out: (bhw) t c-3
         '''
 
         if not self.is_img: # for SMPL head
-            # prev_frame = x[:,0:1,:].permute(0,2,1)
-            # curr_frame = x[:,1:2,:].permute(0,2,1)
-            # future_frame = x[:,2:3,:]
 
-            px = self.tem_expansion_layer1(x[:,0:1,:].permute(0,2,1)).permute(0,2,1)
-            cx = self.tem_expansion_layer2(x[:,1:2,:].permute(0,2,1)).permute(0,2,1)
-            # x = x.permute(1,0,2)  # (b,t,c) -> (t,b,c)
+            px = self.tem_expansion_layer1(x[:,0:1,:].permute(0,2,1)).permute(0,2,1) # prev_frame
+            cx = self.tem_expansion_layer2(x[:,1:2,:].permute(0,2,1)).permute(0,2,1) # curr_frame
             del x
 
             ph = self.l11(px) # 4608, 16, 512
             ch = self.l12(cx)
-
             del px
             del cx
-
-            print(f'debug -- ph.shape {ph.shape}')
             
             # TODO(yiwen) check positional encoding after linear
             ph = self.pos_drop(ph)
@@ -151,32 +149,56 @@ class temporal_attention_sw(nn.Module):
             h = self.l2(transformer_output) # 4608, 16, 1280
             out = self.tem_compact_layer2(h.permute(0,2,1)).permute(0,2,1) # NOTE(yiwen) only the current
 
-        else: # for img feature
-            # prev_frame = x[:,0:1,:].permute(0,2,1)
-            # curr_frame = x[:,1:2,:].permute(0,2,1)
-            # future_frame = x[:,2:3,:]
+        else: # for img feature      
+    
+            B, _, hw, D = x.shape
+            x = x.reshape(B, -1, 3, hw, D).transpose(0,1)
+            memory = []
+            out_ls = []
 
-            px = self.tem_expansion_layer1(x[:,0:1,:].permute(0,2,1)).permute(0,2,1)
-            cx = self.tem_expansion_layer2(x[:,1:2,:].permute(0,2,1)).permute(0,2,1)
-            # x = x.permute(1,0,2)  # (b,t,c) -> (t,b,c)
-            del x
+            for window_id in range(x.shape[0]):
+                batch_windows = x[window_id]
 
-            ph = self.l11(px) # 4608, 16, 512
-            ch = self.l12(cx)
+                prev_frame = batch_windows[:,0:1,:,:].reshape(-1, hw, D) # 8, 192, 1283 TODO(yiwen) large T
+                curr_frame = batch_windows[:,1:2,:,:].reshape(-1, hw, D) # 8, 192, 1283 TODO(yiwen) large T
+                
+                # hw 192 --> 12
+                prev_frame = prev_frame.permute(0,2,1).reshape(B, D, 16, 12)
+                prev_frame = self.spa_pooling_layer(prev_frame).reshape(B, D, -1).permute(0,2,1)
 
-            del px
-            del cx
+                curr_frame = curr_frame.permute(0,2,1).reshape(B, D, 16, 12)
+                curr_frame = self.spa_pooling_layer(curr_frame).reshape(B, D, -1).permute(0,2,1)
 
-            print(f'debug -- ph.shape {ph.shape}')
+                # feature compress
+                ph = self.l11(prev_frame) # 16, 12, 512
+                ch = self.l12(curr_frame)
 
-            # TODO(yiwen) check positional encodding after linear
-            ph = self.pos_drop(ph)
-            transformer_output = self.naive_transfomer(ch, ph)
+                # TODO(yiwen) check positional encodding after linear
+                ph = self.pos_drop(ph)
+                transformer_output = self.naive_transfomer(ch, ph) # NOTE(yiwen) ph.shape=ch.shape=transformer_output.shape=16, 12, 512
 
-            h = self.l2(transformer_output) # 4608, 16, 1280
-            out = self.tem_compact_layer1(h.permute(0,2,1)).permute(0,2,1)         
-        
-        return out
+                if len(memory)!=0:
+                    mix_feats = sum(w * m for w, m in zip(self.weight_list, memory))
+                    transformer_output = torch.cat([transformer_output, mix_feats], dim=-1)
+                    transformer_output = self.feature_fusion(transformer_output)
+
+                else:  
+                    # FIFO
+                    memory.append(transformer_output)
+                    if len(memory)>self.memory_num:
+                        memory.pop(0)
+                
+                # NOTE(yiwen) currently, is bs=1 get the output image transformer, and bs=1 get the output posetransformer, then pass to the next window
+                transformer_output = self.spa_expansion_layer(transformer_output.permute(0,2,1)).permute(0,2,1)
+                h = self.l2(transformer_output) # 24, 16, 1280
+
+                curr_rp = h.reshape(-1, self.frame_chunk_size, h.shape[-1]) # 4608, 1, 1280 NOTE(yiwen) a representation for current h
+                out = self.tem_expansion_layer(curr_rp.permute(0,2,1)).permute(0,2,1) # 384, 3, 1280 
+
+                out_ls.append(out)
+    
+            out_tensor = torch.stack(out_ls).to(out.device)
+        return out_tensor.flatten(0,1)
 
 
 class temporal_attention(nn.Module):
