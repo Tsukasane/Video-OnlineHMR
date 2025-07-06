@@ -22,6 +22,7 @@ TRAIN:
   RESUME: None
   LOAD_LATEST: True
   BATCH_SIZE: 24
+  SEQUENCE_BS: 4
   MULTI_LR: True
   LR: 1e-5
   LR2: 3e-5
@@ -42,7 +43,7 @@ TRAIN:
 MODEL:
   CHECKPOINT: 'data/pretrain/hmr2b/epoch=35-step=1000000.ckpt'
   ST_MODULE: True
-  MOTION_MODULE: True
+  MOTION_MODULE: False
   ST_HDIM: 512
   MOTION_HDIM: 384
   ST_NLAYER: 6

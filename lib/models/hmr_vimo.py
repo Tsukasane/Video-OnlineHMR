@@ -33,6 +33,7 @@ class HMR_VIMO(nn.Module):
         self.crop_size = cfg.IMG_RES
         self.seq_len = cfg.DATASET.SEQ_LEN
         self.chunk_size = 16
+        self.train_bs = cfg.TRAIN.SEQUENCE_BS
 
         # SMPL
         self.smpl = SMPL()      
@@ -85,9 +86,10 @@ class HMR_VIMO(nn.Module):
         self.smpl_head = SMPLTransformerDecoderHead()
 
         self.register_buffer('initialized', torch.tensor(False))
+        self.inference_memory = None
 
 
-    def forward(self, batch, valid_range=(0,2), **kwargs):
+    def forward(self, batch, valid_range=(0,2), is_train=False, **kwargs):
         '''
         Args:
             - batch (dict)
@@ -107,18 +109,23 @@ class HMR_VIMO(nn.Module):
                 - trans_full (list) element shape B*T, 1, 3
         '''
 
-        image  = batch['img'] # B*T, 3, 256, 256
+        image = batch['img'] # B*T, 3, 256, 256
         center = batch['center'] # B*T, 2
         scale  = batch['scale'] # B*T
         img_focal = batch['img_focal'] # B*T
         img_center = batch['img_center'] # B*T, 2
+
+        if is_train:
+            batch_size = self.train_bs # TODO(yiwen) pass through configs to function
+        else:
+            batch_size = 1
 
         # estimate focal length, and bbox 
         bbox_info = self.bbox_est(center, scale, img_focal, img_center) # 128, 3
 
         # backbone
         with autocast('cuda'):
-            # BT, 3, H, W --> BT, C=1280, h, w
+            # B*N*T=2*24*3, 3, H, W --> BT, C=1280, h, w
             feature = self.backbone(image[:,:,:,32:-32]) # pass through vit
             feature = feature.float() # 128, 1280, w=16, h=12 NOTE(yiwen) image feature of each patch/frame
 
@@ -137,15 +144,15 @@ class HMR_VIMO(nn.Module):
         feature = torch.cat([feature, bb], dim=1) # B*3=48, 1283, 16, 12 NOTE(yiwen) image + human bbox
 
         # patch level -->
-        feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c',b=1) # c=1283
-        feature = self.st_module(feature) # 1536, 16, 1280 NOTE(yiwen) fuse the temporal info of each patch
+        feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1283
+        feature, self.inference_memory = self.st_module(feature, mix_feats=self.inference_memory, is_train=is_train) # 1536, 16, 1280 NOTE(yiwen) fuse the temporal info of each patch
 
         # reshape to frame level
-        feature = einops.rearrange(feature, '(b h w) t c -> (b t) c h w', h=16, w=12) # B, 1280, 16, 12 NOTE(yiwen) reshape to frame level
+        feature = einops.rearrange(feature, '(b h w) t c -> (b t) c h w', h=16, w=12) # BN, 1280, 16, 12 NOTE(yiwen) reshape to frame level
 
         # frame level feature estimate frame level smpl
         pred_pose, pred_shape, pred_cam = self.smpl_head(feature) #TODO(yiwen) use how many windows in training? 
-        
+        # BN, 144  BN, 10  BN 3
         pred_shape = select_valid(pred_shape, valid_range)
         pred_cam = select_valid(pred_cam, valid_range)
         pred_rotmat_0 = rot6d_to_rotmat(select_valid(pred_pose, valid_range)).reshape(-1, 24, 3, 3) # 72, 24, 3, 3
@@ -280,7 +287,6 @@ class HMR_VIMO(nn.Module):
             with torch.no_grad():
                 batch = {k: v.to(device) for k, v in batch.items() if type(v)==torch.Tensor}
                 # batch.keys() 'img', 'img_idx', 'scale', 'center', 'img_focal', 'img_center'
-
                 out, _ = self.forward(batch) 
                 # out.keys() 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
                 

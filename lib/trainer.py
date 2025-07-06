@@ -12,24 +12,24 @@ def select_valid(batch_tensor, valid_range):
 
     return batch_tensor
 
-def move_last_dim_to_second(tensor: torch.Tensor):
+def move_last_dim_to_third(tensor: torch.Tensor):
     """
     Move the last dimension to the second dimension.
     """
     dims = list(range(tensor.dim()))
     last = dims.pop()       # remove -1 (last)
-    dims.insert(1, last)    # insert last dim into second position
+    dims.insert(2, last)    # insert last dim into second position
     return tensor.permute(*dims)
 
 
 def slice_to_small_chunk(ori_chunk, chunk_len=3, stride=1):
     """
-    Slice big chunk (26,...) from the same video sequence to small chunks (B*3,...), B=24
+    Slice big chunk (B, 26,...) from the same video sequence to small chunks (B*3,...), B=24
     """
-    windows = ori_chunk.unfold(dimension=0, size=chunk_len, step=stride)
+    windows = ori_chunk.unfold(dimension=1, size=chunk_len, step=stride)
     
-    windows = move_last_dim_to_second(windows)
-    windows = windows.flatten(0,1)
+    windows = move_last_dim_to_third(windows)
+    windows = windows.flatten(1,2)
 
     # print(f'debug -- windows.shape {windows.shape}')
 
@@ -52,19 +52,19 @@ class Trainer(BaseTrainer):
         for i, batch in enumerate(tqdm(self.train_loader, desc="Computing batch")): # how to ignore the train.invalid elements
 
             # 72, 24, 4     B*window_size, 24, 4'
-            # NOTE(yiwen) modify the training dataloader
-            batch = {k: v.flatten(0, 1) for k, v in batch.items() if type(v)==torch.Tensor} # TODO(yiwen) check why flatten here
+            
+            # batch = {k: v.flatten(0, 1) for k, v in batch.items() if type(v)==torch.Tensor} # TODO(yiwen) check why flatten here
             # ['img_idx', 'img_focal', 'img_center', 'img', 'pose', 'betas', 'pose_3d', 'keypoints', 'scale', 'center', 'has_smpl', 'has_pose_3d']
             # [26, 1]  [26]  [26, 2]  [26, 3, 256, 256]  [26, 72]  [26, 10]  [26, 24, 4]  [26, 49, 3]  [26]  [26, 2]  [26]  [26]
 
-            batch = {k: slice_to_small_chunk(v) for k, v in batch.items()} # NOTE(yiwen) first do other process, then to(device)
-            batch = {k: v.to(self.device) for k, v in batch.items()}
+            batch = {k: slice_to_small_chunk(v) for k, v in batch.items() if type(v)==torch.Tensor} # NOTE(yiwen) first do other process, then to(device)
+            batch = {k: v.flatten(0,1).to(self.device) for k, v in batch.items()}
 
             batch['beta_weight'] = self.cfg.TRAIN.SMPL_BETA
             batch['smpl'] = self.model.smpl
 
             # Forward pass
-            out, iter_preds = self.model(batch, self.valid_range, iters=update_iter)
+            out, iter_preds = self.model(batch, self.valid_range, is_train=True, iters=update_iter)
             try:
                 batch['pred_rotmat_0'] = out['pred_rotmat_0'] # 72, 24, 3, 3
             except Exception:
@@ -150,7 +150,8 @@ class Trainer(BaseTrainer):
         device = self.device
         db = loader.dataset
         
-        self.valid_range = self.cfg.MODEL.VALID_RANGE 
+        self.valid_range = self.cfg.MODEL.VALID_RANGE
+        self.transformer_memory = None
         # evaluator = Evaluator(dataset_length=len(db.imgname),
         #                       seq_len=getattr(model, 'seq_len', None))
         evaluator = Evaluator(dataset_length=len(db.imgname),
@@ -167,7 +168,8 @@ class Trainer(BaseTrainer):
             # prediction
             with torch.no_grad():
                 # batch.keys() ['img_idx', 'img_focal', 'img_center', 'img', 'pose', 'betas', 'pose_3d', 'gt_verts', 'keypoints', 'scale', 'center', 'has_smpl', 'has_pose_3d']
-                out, _ = model(batch, self.valid_range, iters=update_iter) # 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
+                # NOTE(yiwen) set is_train=True in training and validation
+                out, _ = model(batch, self.valid_range, is_train=True, iters=update_iter) # 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
 
                 if '3dpw' in db.dataset: # TODO(yiwen) temporally use 3dpw as evalset to see vertices performance
                     mode = '3dpw'

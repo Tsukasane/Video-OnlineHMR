@@ -16,6 +16,7 @@ def get_dataloaders(cfg=None):
     train_stride = train_seqlen
     stride = cfg.DATASET.STRIDE
 
+    sequence_bs = cfg.TRAIN.SEQUENCE_BS
     test_bs = cfg.TEST.BATCH_SIZE
 
 
@@ -32,7 +33,7 @@ def get_dataloaders(cfg=None):
                             # seqlen=stride should be batch_size+2, set the real batch_size=1
                             # then reshape the input to B, window_size=3, ...
                             # --> make sure the frames are from continous seqs
-    train_loader = CheckpointDataLoader(train, shuffle=True, batch_size=1, num_workers=num_workers)
+    train_loader = CheckpointDataLoader(train, shuffle=True, batch_size=sequence_bs, num_workers=num_workers)
     
     # NOTE(yiwen) iftest, each window len=3, step=1, total length=seqlen-2
     test = VideoDataset(valid_set, is_train=False, use_augmentation=False, 
