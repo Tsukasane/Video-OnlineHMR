@@ -10,6 +10,7 @@ from lib.core import constants
 
 
 from freq_motion import plot_spectrogram, plot_amplitude
+import pickle
 
 def cal_spectrogram_similarity(gt_amp, pred_amp):
     # 1) MSE
@@ -188,13 +189,14 @@ class Evaluator:
         self.J24_TO_J14 = constants.J24_TO_J14
         self.H36M_TO_J17 = constants.H36M_TO_J17
         self.H36M_TO_J14 = constants.H36M_TO_J14
+        self.V6890_TO_V138_mat = pickle.load(open(constants.DOWNSAMPLE_MAT, 'rb')).to_dense()
         self.all_acc = []
 
         self.valid_range = (1,1)
         self.chunk_size = 16
 
         self.visualize_spec = True
-        self.visualize_verticesspec = True
+        self.visualize_verticesspec = False # false in emdb_1, true in 3dpw_test_vid
 
 
     def __call__(self, gt_keypoints_3d, pred_keypoints_3d, dataset='3dpw', 
@@ -216,21 +218,23 @@ class Evaluator:
         gt_valid, pred_valid = self.get_valid_joints(gt_keypoints_3d, 
                                                      pred_keypoints_3d, 
                                                      dataset)
-        # 48, 24, 3 --> 16, 24, 3 (T, J, 3)
+        # 48, 24, 3 --> 16, 24, 3 (T, J, 3) NOTE(yiwen) we do not change the validation bs
         gt_valid = select_valid(gt_valid, self.valid_range)
         pred_valid = select_valid(pred_valid, self.valid_range)
 
-        gt_verts = select_valid(gt_verts, self.valid_range)
-        pred_verts = select_valid(pred_verts, self.valid_range)
-
         # NOTE(yiwen) fps=30
         if self.visualize_verticesspec: # one time for each validation pass
+            self.V6890_TO_V138_mat = self.V6890_TO_V138_mat.to(gt_valid.device)
             # gt_valid: B, 6890, 3
-            gt_amplitude = plot_spectrogram(gt_verts, sr=100, save_name="vis_verticesGT3.png") # NOTE(yiwen) decide the sr
-            pred_amplitude = plot_spectrogram(pred_verts, sr=100, save_name="vis_verticesPred3.png")
+            gt_verts = select_valid(gt_verts, self.valid_range)
+            pred_verts = select_valid(pred_verts, self.valid_range)
+
+            gt_v138 = torch.matmul(self.V6890_TO_V138_mat, gt_verts) # 16, 6890, 3-->16, 138, 3
+            pred_v138 = torch.matmul(self.V6890_TO_V138_mat, pred_verts)
+            gt_amplitude = plot_spectrogram(gt_v138, sr=138*30, save_name="vis_138verticesGT3.png") # NOTE(yiwen) decide the sr
+            pred_amplitude = plot_spectrogram(pred_v138, sr=138*30, save_name="vis_138verticesPred3.png")
 
             plot_amplitude(gt_amplitude-pred_amplitude, save_name="gt-predvertices3.png")
-
             cal_spectrogram_similarity(gt_amplitude, pred_amplitude)
             self.visualize_verticesspec = False
 

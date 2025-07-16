@@ -16,7 +16,7 @@ class CrossAttention(nn.Module):
         
         self.dropout = nn.Dropout(dropout)
     
-    def forward(self, x, cond):
+    def forward(self, x, cond, return_weights=False):
         B, T, D = x.shape  # x: (B, T, D)
         B, T1, D = cond.shape  # cond: (B, T1, D)
         
@@ -29,6 +29,8 @@ class CrossAttention(nn.Module):
         attn_output = attn_weights @ V  # (B, n_heads, T, head_dim)
         
         attn_output = attn_output.transpose(1, 2).contiguous().view(B, T, D)  # (B, T, D)
+        if return_weights:
+            return self.out_proj(attn_output), attn_weights
         return self.out_proj(attn_output)
 
 class TransformerBlock(nn.Module):
@@ -48,15 +50,21 @@ class TransformerBlock(nn.Module):
         self.norm3 = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
     
-    def forward(self, x, cond):
-        x = x + self.dropout(self.self_attn(x, x, x)[0])  # Self-Attention
+    def forward(self, x, cond, return_attn=False):
+        sa_out, sa_weights = self.self_attn(x, x, x, need_weights=True)
+        x = x + self.dropout(sa_out)
         x = self.norm1(x)
 
-        x = x + self.dropout(self.cross_attn(x, cond))  # Cross-Attention
+        ca_out, ca_weights = self.cross_attn(x, cond, return_weights=True)
+        x = x + self.dropout(ca_out)
         x = self.norm2(x)
 
-        x = x + self.dropout(self.ffn(x))  # FFN
+        ffn_out = self.ffn(x)
+        x = x + self.dropout(ffn_out)
         x = self.norm3(x)
+
+        if return_attn:
+            return x, sa_weights, ca_weights
         return x
 
 class ShortWindowTransformer(nn.Module):
@@ -66,9 +74,17 @@ class ShortWindowTransformer(nn.Module):
             TransformerBlock(d_model, n_heads, dim_feedforward, dropout) for _ in range(num_layers)
         ])
     
-    def forward(self, x, cond):
+    def forward(self, x, cond, return_attn=False):
+        sa_list, ca_list = [], []
         for layer in self.layers:
-            x = layer(x, cond)
+            if return_attn:
+                x, sa, ca = layer(x, cond, return_attn=True)
+                sa_list.append(sa)
+                ca_list.append(ca)
+            else:
+                x = layer(x, cond)
+        if return_attn:
+            return x, sa_list, ca_list
         return x
 
 

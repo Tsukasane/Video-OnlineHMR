@@ -76,3 +76,4 @@ J49_FLIP_PERM = [0, 1, 5, 6, 7, 2, 3, 4, 8, 12, 13, 14, 9, 10, 11, 16, 15, 18, 1
               + [25+i for i in J24_FLIP_PERM]
 
 
+DOWNSAMPLE_MAT = "/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/data/smpl/downsample_mat.pkl"

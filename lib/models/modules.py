@@ -5,6 +5,7 @@ import torch.nn as nn
 from .components.pose_transformer import TransformerDecoder
 from .conformer import Conformer
 from .transformer import ShortWindowTransformer
+import matplotlib.pyplot as plt
 
 
 class SMPLTransformerDecoderHead(nn.Module):
@@ -67,6 +68,23 @@ class SMPLTransformerDecoderHead(nn.Module):
 
         return pred_pose, pred_shape, pred_cam
 
+def plot_attention_heads(attn_map, save_path=None):
+    num_heads = attn_map.shape[0]
+    fig, axs = plt.subplots(2, 2, figsize=(10, 8))
+
+    for i in range(num_heads):
+        ax = axs[i // 2, i % 2]
+        im = ax.imshow(attn_map[i].detach().cpu(), cmap="magma", aspect='auto')
+        ax.set_title(f"Head {i}")
+        fig.colorbar(im, ax=ax)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path)
+        print(f"Saved to {save_path}")
+    else:
+        plt.show()
+
 
 class temporal_attention_sw(nn.Module):
     def __init__(self, in_dim=1280, out_dim=1280, hdim=512, nlayer=6, nhead=4, is_img=False, head_dim=1):
@@ -86,8 +104,8 @@ class temporal_attention_sw(nn.Module):
 
         # img
         self.expanded_tem_idim = 3
-        self.out_h = 4
-        self.out_w = 3
+        self.out_h = 16 # div 4, 2, 1
+        self.out_w = 12
         self.compacted_spa_idim = 16
         self.tem_expansion_layer = nn.Linear(self.frame_chunk_size, self.expanded_tem_idim)
         self.tem_compact_layer = nn.Linear(self.expanded_tem_idim, 3*self.frame_chunk_size)
@@ -122,7 +140,7 @@ class temporal_attention_sw(nn.Module):
         weight = 1.0 / self.memory_num
         self.weight_list = [weight]
 
-    def forward(self, x, mix_feats=None, is_train=False):
+    def forward(self, x, mix_feats=None, is_train=False, is_valid=False, visualize_attention=False):
         '''
         Args:
             - [Image] x: (bnt) (hw) c  b=24 t=3
@@ -150,8 +168,7 @@ class temporal_attention_sw(nn.Module):
             out = self.tem_compact_layer2(h.permute(0,2,1)).permute(0,2,1) # NOTE(yiwen) only the current
 
         else: # for img feature      
-    
-            B, _, hw, D = x.shape # 2, 72, 192, 1283
+            B, _, hw, D = x.shape # B, 72, 192, 1283
             x = x.reshape(B, -1, 3, hw, D).transpose(0,1) # N, B, 3, hw, D
             memory = []
             out_ls = []
@@ -175,16 +192,30 @@ class temporal_attention_sw(nn.Module):
 
                 # TODO(yiwen) check positional encodding after linear
                 ph = self.pos_drop(ph)
+
+                if visualize_attention:
+                    print(f"visualize_attention")
+                    transformer_output, self_attns, cross_attns = self.naive_transfomer(ch, ph, return_attn=True)
+                    # cross_attns[layer_idx]: shape [B, H, T_q, T_k]
+                    crossattn_map = cross_attns[1][0]  # shape: [head, T_query, T_key]
+                    selfattn_map = self_attns[0][:4]
+                    plot_attention_heads(crossattn_map, "vis_crossattn.png")
+                    plot_attention_heads(selfattn_map, "vis_selfattn.png")
+
                 transformer_output = self.naive_transfomer(ch, ph) # NOTE(yiwen) ph.shape=ch.shape=transformer_output.shape=16, 12, 512
                 inference_memory = transformer_output
 
-                if (not is_train) and (mix_feats is not None):
+                if (not is_train) and (not is_valid) and (mix_feats is not None):
                     memory.append(mix_feats)
                 
                 if len(memory)!=0:
                     mix_feats = sum(w * m for w, m in zip(self.weight_list, memory))
-                    transformer_output = torch.cat([transformer_output, mix_feats], dim=-1)
-                    transformer_output = self.feature_fusion(transformer_output)
+                    try:
+                        transformer_output = torch.cat([transformer_output, mix_feats], dim=-1)
+                        transformer_output = self.feature_fusion(transformer_output)
+                    except:
+                        import pdb
+                        pdb.set_trace()
 
                 else:  
                     # FIFO

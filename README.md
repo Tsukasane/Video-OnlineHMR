@@ -1,8 +1,9 @@
 # Video-Based Online Human Mesh Recovery
 
+横轴是cond，纵轴是query，也就是说，curr帧不同位置的有效信息只和prev帧的某些特定patch高度相关
+而selfattn的响应看起来很乱
 
 # TODOs
-- sequential 之后怎么保证对比的batch_size一致
 - 在没有memory时，BEDLAM 作为 trainset 每个连续 sequence 短一点没关系，因为训练时只依赖三帧窗口内部，三种对比方法 validation set 是一致的
 - Black image corresponds to 'invalid' label in annotations, and will be aborted in video_dataset
 - bbox is kept at the center of the video

@@ -60,6 +60,8 @@ class Trainer(BaseTrainer):
             batch = {k: slice_to_small_chunk(v) for k, v in batch.items() if type(v)==torch.Tensor} # NOTE(yiwen) first do other process, then to(device)
             batch = {k: v.flatten(0,1).to(self.device) for k, v in batch.items()}
 
+            # import pdb
+            # pdb.set_trace()
             batch['beta_weight'] = self.cfg.TRAIN.SMPL_BETA
             batch['smpl'] = self.model.smpl
 
@@ -151,7 +153,10 @@ class Trainer(BaseTrainer):
         db = loader.dataset
         
         self.valid_range = self.cfg.MODEL.VALID_RANGE
-        self.transformer_memory = None
+       
+        gt_vertices = None
+        pred_vertices = None
+
         # evaluator = Evaluator(dataset_length=len(db.imgname),
         #                       seq_len=getattr(model, 'seq_len', None))
         evaluator = Evaluator(dataset_length=len(db.imgname),
@@ -169,7 +174,7 @@ class Trainer(BaseTrainer):
             with torch.no_grad():
                 # batch.keys() ['img_idx', 'img_focal', 'img_center', 'img', 'pose', 'betas', 'pose_3d', 'gt_verts', 'keypoints', 'scale', 'center', 'has_smpl', 'has_pose_3d']
                 # NOTE(yiwen) set is_train=True in training and validation
-                out, _ = model(batch, self.valid_range, is_train=True, iters=update_iter) # 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
+                out, _ = model(batch, self.valid_range, is_train=False, is_valid=True, iters=update_iter) # 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
 
                 if '3dpw' in db.dataset: # TODO(yiwen) temporally use 3dpw as evalset to see vertices performance
                     mode = '3dpw'

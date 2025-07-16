@@ -34,6 +34,7 @@ class HMR_VIMO(nn.Module):
         self.seq_len = cfg.DATASET.SEQ_LEN
         self.chunk_size = 16
         self.train_bs = cfg.TRAIN.SEQUENCE_BS
+        self.valid_bs = cfg.TEST.BATCH_SIZE
 
         # SMPL
         self.smpl = SMPL()      
@@ -46,11 +47,6 @@ class HMR_VIMO(nn.Module):
             hdim = cfg.MODEL.ST_HDIM
             nlayer = cfg.MODEL.ST_NLAYER
 
-            # self.st_module = temporal_attention(in_dim=1280+3, 
-            #                                     out_dim=1280,
-            #                                     hdim=hdim,
-            #                                     nlayer=nlayer,
-            #                                     residual=True)
             # online
             self.st_module = temporal_attention_sw(in_dim=1280+3, 
                                                 out_dim=1280,
@@ -73,12 +69,6 @@ class HMR_VIMO(nn.Module):
                                                     nlayer=nlayer,
                                                     is_img=False,
                                                     head_dim=head_dim)
-            # tram
-            # self.motion_module = temporal_attention(in_dim=144+3, 
-            #                                         out_dim=144,
-            #                                         hdim=hdim,
-            #                                         nlayer=nlayer,
-            #                                         residual=False)
         else:
             self.motion_module = None
 
@@ -89,7 +79,7 @@ class HMR_VIMO(nn.Module):
         self.inference_memory = None
 
 
-    def forward(self, batch, valid_range=(0,2), is_train=False, **kwargs):
+    def forward(self, batch, valid_range=(0,2), is_train=False, is_valid=False, **kwargs):
         '''
         Args:
             - batch (dict)
@@ -117,6 +107,8 @@ class HMR_VIMO(nn.Module):
 
         if is_train:
             batch_size = self.train_bs # TODO(yiwen) pass through configs to function
+        if is_valid:
+            batch_size = self.valid_bs
         else:
             batch_size = 1
 
@@ -145,7 +137,7 @@ class HMR_VIMO(nn.Module):
 
         # patch level -->
         feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1283
-        feature, self.inference_memory = self.st_module(feature, mix_feats=self.inference_memory, is_train=is_train) # 1536, 16, 1280 NOTE(yiwen) fuse the temporal info of each patch
+        feature, self.inference_memory = self.st_module(feature, mix_feats=self.inference_memory, is_train=is_train, is_valid=is_valid) # 1536, 16, 1280 NOTE(yiwen) fuse the temporal info of each patch
 
         # reshape to frame level
         feature = einops.rearrange(feature, '(b h w) t c -> (b t) c h w', h=16, w=12) # BN, 1280, 16, 12 NOTE(yiwen) reshape to frame level

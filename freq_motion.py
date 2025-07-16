@@ -6,21 +6,23 @@ import torchaudio
 import torch.nn.functional as F
 
 
-def plot_spectrogram(keypoints_3d, sr=30, save_name="mspec.png", align_interpolate=True):
+def plot_spectrogram(motion_ts, sr=30, save_name="mspec.png", align_interpolate=True):
     '''
     Args:
-        - keypoints_3d: seqlen, 24, 3
+        - motion_ts: keypoints_3d (seqlen, 24, 3) or vertices or sparse vertices
         - sr: sample rate
         - save_name: figure name
         - align_interpolate: whether align time to original sequence (frame)
     '''
-    device = keypoints_3d.device
-    y = keypoints_3d.reshape(-1,)
+    device = motion_ts.device
+    y = motion_ts.reshape(-1,)
+    # y = motion_ts.norm(dim=2).mean(dim=1).unsqueeze(0)
+    print(f'debug -- freq_motion {y.shape}')
     
-    seqlen = keypoints_3d.shape[0]
+    seqlen = motion_ts.shape[0]
 
-    n_fft = int(sr * 1)   # 1 second window size
-    hop_length = n_fft // 4  # 75% overlap
+    n_fft = 8 #int(sr * 1)   # 1 second window size
+    hop_length = 4 #n_fft // 4  # 75% overlap
 
     if y.ndim == 1:
         y = y.unsqueeze(0)  # [1, samples]
@@ -52,7 +54,7 @@ def plot_spectrogram(keypoints_3d, sr=30, save_name="mspec.png", align_interpola
 
 def plot_amplitude(amplitude, save_name):
     plt.figure(figsize=(10, 4))
-    plt.imshow(amplitude.cpu(), origin='lower', aspect='auto', cmap='inferno')
+    plt.imshow(amplitude.cpu(), origin='lower', aspect='auto', cmap='nipy_spectral')
     plt.colorbar(format='%+2.0f')
     plt.title('Motion Spectrogram')
     plt.tight_layout()
