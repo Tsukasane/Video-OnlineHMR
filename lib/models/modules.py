@@ -47,13 +47,18 @@ class SMPLTransformerDecoderHead(nn.Module):
 
         
     def forward(self, x, **kwargs):
+        '''
+        Args:
+            - B: the real batch size
+            - N: window num
+        '''
 
         batch_size = x.shape[0]
         # vit pretrained backbone is channel-first. Change to token-first
-        x = einops.rearrange(x, 'b c h w -> b (h w) c')
+        x = einops.rearrange(x, 'b c h w -> b (h w) c') # b=BN, HW, C TODO(yiwen) 把N分出来写seq的循环，或者把head直接一起写到st_module里
 
-        init_body_pose = self.init_body_pose.expand(batch_size, -1)
-        init_betas = self.init_betas.expand(batch_size, -1)
+        init_body_pose = self.init_body_pose.expand(batch_size, -1) # NOTE(yiwen) originally use mean init, TODO switch to prev window init?
+        init_betas = self.init_betas.expand(batch_size, -1) # they are stacked and passed to smplhead at the same time in training (so that cannot pass prev window motion to the next window)
         init_cam = self.init_cam.expand(batch_size, -1)
 
         # Pass through transformer

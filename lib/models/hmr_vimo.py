@@ -115,36 +115,56 @@ class HMR_VIMO(nn.Module):
         # estimate focal length, and bbox 
         bbox_info = self.bbox_est(center, scale, img_focal, img_center) # 128, 3
 
-        # backbone
+        # TODO(yiwen) data init
+        # TODO(yiwen) no need window if using casual transformer, still can keep seqlen as windowsize=16
+
+        # input: B, T, H, W, C  H*W=num_patch
+            # training: windowsize=16, tril mask to apply attention
+                # learnable q tokens: a clue for output smpl --> after transformer, pass q tokens to ffn --> then to smpl head
+                    # self-attn: q tokens & q tokens + mask
+                    # cross-attn: q tokens & image features + mask
+            # inference: one frame each time
+                # one frame q token each time --> update then get one frame SMPL paras
+                    # caches use FIFO, to keep the memory updated
+                    # self cache: previous q tokens (previous smpl clues)
+                    # cross cache: previous image feature after projection
+                # cat all SMPL outputs together
+
+        # backbone 
         with autocast('cuda'):
             # B*N*T=2*24*3, 3, H, W --> BT, C=1280, h, w
             feature = self.backbone(image[:,:,:,32:-32]) # pass through vit
             feature = feature.float() # 128, 1280, w=16, h=12 NOTE(yiwen) image feature of each patch/frame
 
-        # space-time module
-        ''' TODO(yiwen)
-        memory usage: 14081.9443359375
-        image level memory: feature of previous window,
-            window should in sequential order also in training, step size = 1 
-                - pose memory: then can give the prediction of future frame in the last window (would also be the current frame in this window) 
-                               to be fused to context in this window
-                - image memory: 0,1 --> context, to be fused with 1,2 --> context
-        
-        '''
         # frame level
         bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12) 
-        feature = torch.cat([feature, bb], dim=1) # B*3=48, 1283, 16, 12 NOTE(yiwen) image + human bbox
+        # feature = torch.cat([feature, bb], dim=1) # B*3=48, 1283, 16, 12 NOTE(yiwen) image + human bbox if we don't use this bbox info
 
         # patch level -->
-        feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1283
-        feature, self.inference_memory = self.st_module(feature, mix_feats=self.inference_memory, is_train=is_train, is_valid=is_valid) # 1536, 16, 1280 NOTE(yiwen) fuse the temporal info of each patch
+        feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only
+        
 
-        # reshape to frame level
-        feature = einops.rearrange(feature, '(b h w) t c -> (b t) c h w', h=16, w=12) # BN, 1280, 16, 12 NOTE(yiwen) reshape to frame level
+        # NOTE(yiwen) casual transformer
+        from lib.models.casual_kvcache import add_pos_to_seqtokens
+        from lib.models.casual_kvcache import KVCacheDecoder, SpatialAwarePooling
 
-        # frame level feature estimate frame level smpl
-        pred_pose, pred_shape, pred_cam = self.smpl_head(feature) #TODO(yiwen) use how many windows in training? 
+        decoder = KVCacheDecoder(img_feat_dim=512, hidden_dim=512).to(feature.device)
+        pred_pose, pred_shape, pred_cam = decoder(img_feats_all=feature, q_tokens=None)
+        pred_pose = pred_pose.reshape(-1, pred_pose.shape[-1]) # B*T, 144
+        pred_shape = pred_shape.reshape(-1, pred_shape.shape[-1]) # B*T, 10
+        pred_cam = pred_cam.reshape(-1, pred_cam.shape[-1])
+
+
+        # # NOTE(yiwen) naive transformer
+        # feature, self.inference_memory = self.st_module(feature, mix_feats=self.inference_memory, is_train=is_train, is_valid=is_valid) # 1536, 16, 1280 NOTE(yiwen) fuse the temporal info of each patch
+        # # reshape to frame level
+        # feature = einops.rearrange(feature, '(b h w) t c -> (b t) c h w', h=16, w=12) # BN, 1280, 16, 12 NOTE(yiwen) reshape to frame level
+        # # frame level feature estimate frame level smpl
+        # pred_pose, pred_shape, pred_cam = self.smpl_head(feature)
         # BN, 144  BN, 10  BN 3
+        
+        
+        
         pred_shape = select_valid(pred_shape, valid_range)
         pred_cam = select_valid(pred_cam, valid_range)
         pred_rotmat_0 = rot6d_to_rotmat(select_valid(pred_pose, valid_range)).reshape(-1, 24, 3, 3) # 72, 24, 3, 3
