@@ -41,6 +41,7 @@ class Trainer(BaseTrainer):
         return
 
     def train_one_epoch(self, ):
+        ##### NOTE(yiwen) the train function
         self.model.train()
         self.model.freeze_modules()
         update_iter = self.cfg.TRAIN.UPDATE_ITER
@@ -48,7 +49,6 @@ class Trainer(BaseTrainer):
 
         self.valid_range = self.cfg.MODEL.VALID_RANGE # prev 0, curr 1, future 2
 
-        # TODO(yiwen) modify to batch start from training
         for i, batch in enumerate(tqdm(self.train_loader, desc="Computing batch")): # how to ignore the train.invalid elements
 
             # 72, 24, 4     B*window_size, 24, 4'
@@ -113,6 +113,7 @@ class Trainer(BaseTrainer):
         
 
     def check_and_validate(self, batch_id):
+        ##### NOTE(yiwen) validation function
         steps = self.global_step
 
         # Training summary
@@ -173,7 +174,9 @@ class Trainer(BaseTrainer):
             # prediction
             with torch.no_grad():
                 # batch.keys() ['img_idx', 'img_focal', 'img_center', 'img', 'pose', 'betas', 'pose_3d', 'gt_verts', 'keypoints', 'scale', 'center', 'has_smpl', 'has_pose_3d']
+                
                 # NOTE(yiwen) set is_train=True in training and validation
+                # NOTE(yiwen) still use the same workflow for train and validation
                 out, _ = model(batch, self.valid_range, is_train=False, is_valid=True, iters=update_iter) # 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
 
                 if '3dpw' in db.dataset: # TODO(yiwen) temporally use 3dpw as evalset to see vertices performance

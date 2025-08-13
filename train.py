@@ -59,19 +59,22 @@ def main(cfg):
     logger.info(f'Freeze pretrained backbone')
 
     if cfg.TRAIN.MULTI_LR:
-        params = [{'params': [p for p in model.smpl_head.parameters() if p.requires_grad]}]
+        params = [{'params': [p for p in model.smpl_decoder.parameters() if p.requires_grad]}]
 
-        if cfg.MODEL.MOTION_MODULE:
-            params.append({'params': [p for p in model.motion_module.parameters() if p.requires_grad],
-                           'lr':cfg.TRAIN.LR2})
+        # params = [{'params': [p for p in model.smpl_head.parameters() if p.requires_grad]}]
+
+        # if cfg.MODEL.MOTION_MODULE:
+        #     params.append({'params': [p for p in model.motion_module.parameters() if p.requires_grad],
+        #                    'lr':cfg.TRAIN.LR2})
             
-        if cfg.MODEL.ST_MODULE:
-            params.append({'params': [p for p in model.st_module.parameters() if p.requires_grad], 
-                           'lr':cfg.TRAIN.LR2})
+        # if cfg.MODEL.ST_MODULE:
+        #     params.append({'params': [p for p in model.st_module.parameters() if p.requires_grad], 
+        #                    'lr':cfg.TRAIN.LR2})
         
-        optimizer = torch.optim.AdamW(params, lr=cfg.TRAIN.LR, weight_decay=cfg.TRAIN.WD)
+        optimizer = torch.optim.AdamW(params, lr=cfg.TRAIN.LR, weight_decay=cfg.TRAIN.WD) # TODO(yiwen) further check dataloader and parameter update logistic
         
-        logger.info(f'Using multiple learning rates:[{cfg.TRAIN.LR}, {cfg.TRAIN.LR2}] and WD: {cfg.TRAIN.WD}')
+        logger.info(f'Using learning rates:[{cfg.TRAIN.LR}] and WD: {cfg.TRAIN.WD}')
+        # logger.info(f'Using multiple learning rates:[{cfg.TRAIN.LR}, {cfg.TRAIN.LR2}] and WD: {cfg.TRAIN.WD}')
     else:
         optimizer = torch.optim.AdamW(params=[p for p in model.parameters() if p.requires_grad], 
                                     lr=cfg.TRAIN.LR, weight_decay=cfg.TRAIN.WD)

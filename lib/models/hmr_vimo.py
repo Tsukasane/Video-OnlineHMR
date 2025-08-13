@@ -14,6 +14,8 @@ from .modules import *
 from .smpl import SMPL
 from ..pipeline.tools import parse_chunks
 
+from lib.models.casual_kvcache import KVCacheDecoder, SMPLDecoderModel
+
 autocast = torch.amp.autocast
 
 
@@ -25,7 +27,7 @@ def select_valid(batch_tensor, valid_range):
 
 
 class HMR_VIMO(nn.Module):
-    def __init__(self, cfg=None, device='cpu', **kwargs):
+    def __init__(self, cfg=None, device='cuda', **kwargs):
 
         super(HMR_VIMO, self).__init__()
         self.device = device
@@ -43,37 +45,40 @@ class HMR_VIMO(nn.Module):
         self.backbone = vit_huge()
 
         # Space-time memory
-        if cfg.MODEL.ST_MODULE: 
-            hdim = cfg.MODEL.ST_HDIM
-            nlayer = cfg.MODEL.ST_NLAYER
+        # if cfg.MODEL.ST_MODULE: 
+        #     hdim = cfg.MODEL.ST_HDIM
+        #     nlayer = cfg.MODEL.ST_NLAYER
 
-            # online
-            self.st_module = temporal_attention_sw(in_dim=1280+3, 
-                                                out_dim=1280,
-                                                hdim=hdim,
-                                                nlayer=nlayer,
-                                                is_img=True) # residual=True
-        else:
-            self.st_module = None
+        #     # online
+        #     self.st_module = temporal_attention_sw(in_dim=1280+3, 
+        #                                         out_dim=1280,
+        #                                         hdim=hdim,
+        #                                         nlayer=nlayer,
+        #                                         is_img=True) # residual=True
+        # else:
+        #     self.st_module = None
+
+        # self.decoder = KVCacheDecoder(intermediate_feat_dim=384, hidden_dim=512).to(device) # TODO(yiwen) make it multi layers
+        self.smpl_decoder = SMPLDecoderModel(input_dim=1280, hidden_dim=512, device=device)
 
         # Motion memory
-        if cfg.MODEL.MOTION_MODULE:
-            hdim = cfg.MODEL.MOTION_HDIM
-            nlayer = cfg.MODEL.MOTION_NLAYER
+        # if cfg.MODEL.MOTION_MODULE:
+        #     hdim = cfg.MODEL.MOTION_HDIM
+        #     nlayer = cfg.MODEL.MOTION_NLAYER
 
-            # online
-            head_dim = cfg.MODEL.VALID_RANGE[1] - cfg.MODEL.VALID_RANGE[0] + 1
-            self.motion_module = temporal_attention_sw(in_dim=144+3, 
-                                                    out_dim=144,
-                                                    hdim=hdim,
-                                                    nlayer=nlayer,
-                                                    is_img=False,
-                                                    head_dim=head_dim)
-        else:
-            self.motion_module = None
+        #     # online
+        #     head_dim = cfg.MODEL.VALID_RANGE[1] - cfg.MODEL.VALID_RANGE[0] + 1
+        #     self.motion_module = temporal_attention_sw(in_dim=144+3, 
+        #                                             out_dim=144,
+        #                                             hdim=hdim,
+        #                                             nlayer=nlayer,
+        #                                             is_img=False,
+        #                                             head_dim=head_dim)
+        # else:
+        self.motion_module = None
 
         # SMPL Head
-        self.smpl_head = SMPLTransformerDecoderHead()
+        # self.smpl_head = SMPLTransformerDecoderHead()
 
         self.register_buffer('initialized', torch.tensor(False))
         self.inference_memory = None
@@ -138,18 +143,13 @@ class HMR_VIMO(nn.Module):
 
         # frame level
         bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12) 
-        # feature = torch.cat([feature, bb], dim=1) # B*3=48, 1283, 16, 12 NOTE(yiwen) image + human bbox if we don't use this bbox info
+        # feature = torch.cat([feature, bb], dim=1) # B*3=48, 1283, 16, 12 NOTE(yiwen) image + human bbox --> if we don't use this bbox info
 
         # patch level -->
         feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only
         
-
         # NOTE(yiwen) casual transformer
-        from lib.models.casual_kvcache import add_pos_to_seqtokens
-        from lib.models.casual_kvcache import KVCacheDecoder, SpatialAwarePooling
-
-        decoder = KVCacheDecoder(img_feat_dim=512, hidden_dim=512).to(feature.device)
-        pred_pose, pred_shape, pred_cam = decoder(img_feats_all=feature, q_tokens=None)
+        pred_pose, pred_shape, pred_cam = self.smpl_decoder(img_feats_all=feature)
         pred_pose = pred_pose.reshape(-1, pred_pose.shape[-1]) # B*T, 144
         pred_shape = pred_shape.reshape(-1, pred_shape.shape[-1]) # B*T, 10
         pred_cam = pred_cam.reshape(-1, pred_cam.shape[-1])
@@ -162,8 +162,6 @@ class HMR_VIMO(nn.Module):
         # # frame level feature estimate frame level smpl
         # pred_pose, pred_shape, pred_cam = self.smpl_head(feature)
         # BN, 144  BN, 10  BN 3
-        
-        
         
         pred_shape = select_valid(pred_shape, valid_range)
         pred_cam = select_valid(pred_cam, valid_range)
@@ -298,6 +296,10 @@ class HMR_VIMO(nn.Module):
             # each batch is a three-frames window
             with torch.no_grad():
                 batch = {k: v.to(device) for k, v in batch.items() if type(v)==torch.Tensor}
+
+
+                import pdb
+                pdb.set_trace()
                 # batch.keys() 'img', 'img_idx', 'scale', 'center', 'img_focal', 'img_center'
                 out, _ = self.forward(batch) 
                 # out.keys() 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
