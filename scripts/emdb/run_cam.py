@@ -27,9 +27,9 @@ args = parser.parse_args()
 # EMDB dataset and splits
 roots = []
 for p in range(10):
-    # if p>1: #NOTE(yiwen) debug
-    #     break
-    folder = f'/edrive2/yiwenzh5/tram_data/EMDB/P{p}'
+    if p>1: #NOTE(yiwen) debug
+        break
+    folder = f'/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/datasets/emdb/EMDB/P{p}'
     root = sorted(glob(f'{folder}/*'))
     roots.extend(root)
 
@@ -70,7 +70,7 @@ for root in emdb:
     imgfiles = sorted(glob(f'{img_folder}/*.jpg'))
 
     masks_ = []
-    for t, imgpath in enumerate(tqdm(imgfiles)):
+    for t, imgpath in enumerate(tqdm(imgfiles)): # NOTE(yiwen) can be online
         img_cv2 = cv2.imread(imgpath)
 
         ### --- Detection ---

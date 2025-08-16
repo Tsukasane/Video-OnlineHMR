@@ -1,14 +1,14 @@
 LOGDIR: ''
 DEVICE: 'cuda'
 OUTPUT_DIR: 'results'
-NUM_WORKERS: 15
+NUM_WORKERS: 4
 SEED_VALUE: 0
 IMG_RES: 256
 
 DATASET:
   LIST: ['3dpw_vid', 'h36m', 'bedlam_vid']
   PARTITION: [0.165, 0.165, 0.67]
-  SEQ_LEN: 3
+  SEQ_LEN: 16
   TEST: 'emdb_1'
 
 LOSS:
@@ -39,7 +39,9 @@ TRAIN:
   OPT: 'AdamW'
   LOSS_SCALE: 1
  
-
+TEST:
+  BATCH_SIZE: 16 
+  
 MODEL:
   CHECKPOINT: 'data/pretrain/hmr2b/epoch=35-step=1000000.ckpt'
   ST_MODULE: True

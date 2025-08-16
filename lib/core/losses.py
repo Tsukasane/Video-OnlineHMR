@@ -5,13 +5,6 @@ import torch.nn.functional as F
 from lib.utils.geometry import batch_rodrigues
 from lib.utils import rotation_conversions as geo
 
-def select_valid(batch_tensor, valid_range):
-    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[1]+1]
-    batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
-
-    return batch_tensor
-
-
 def compute_l2_loss(batch):
     x2 = batch["x2"]
     output = batch["output"]
@@ -26,11 +19,8 @@ def keypoint_loss(batch, valid_range=(0,2), openpose_weight=0., gt_weight=1.):
     The available keypoints are different for each dataset.
     """
 
-    # pred_keypoints_2d = select_valid(batch['pred_keypoints_2d'], valid_range)
-    gt_keypoints_2d = select_valid(batch['keypoints'], valid_range)
-
     pred_keypoints_2d = batch['pred_keypoints_2d'] # 72, 49, 2
-    # gt_keypoints_2d = batch['keypoints'] # 72, 49, 3
+    gt_keypoints_2d = batch['keypoints'] # 72, 49, 3
 
     conf = gt_keypoints_2d[:, :, [-1]].clone()
     conf[:, :25] *= openpose_weight
@@ -47,13 +37,9 @@ def keypoint_3d_loss(batch, valid_range=(0,2)):
     The loss is weighted by the confidence.
     """
 
-    # pred_keypoints_3d = select_valid(batch['pred_keypoints_3d'], valid_range) # 72, 49, 3
-    gt_keypoints_3d = select_valid(batch['pose_3d'], valid_range) # 72, 24, 4
-    has_pose_3d = select_valid(batch['has_pose_3d'], valid_range) # 72
-
     pred_keypoints_3d = batch['pred_keypoints_3d'] # 72, 49, 3
-    # gt_keypoints_3d = batch['pose_3d'] # 72, 24, 4
-    # has_pose_3d = batch['has_pose_3d'] # 72
+    gt_keypoints_3d = batch['pose_3d'] # 72, 24, 4
+    has_pose_3d = batch['has_pose_3d'] # 72
     device = pred_keypoints_3d.device
 
     pred_keypoints_3d = pred_keypoints_3d[:, 25:, :]
@@ -134,10 +120,9 @@ def smpl_losses_plus(batch, valid_range=(0,2), pose_weight=1., beta_weight=0.001
     pred_rotmat_0 = batch['pred_rotmat_0']
     pred_rotmat = batch['pred_rotmat']
     pred_betas  = batch['pred_betas']
-    gt_pose  = select_valid(batch['pose'], valid_range)
-    gt_betas = select_valid(batch['betas'], valid_range)
-    has_smpl = select_valid(batch['has_smpl'], valid_range)
-    
+    gt_pose  = batch['pose']
+    gt_betas = batch['betas']
+    has_smpl = batch['has_smpl']
     beta_weight = batch['beta_weight']
     device = pred_rotmat.device
 
@@ -164,7 +149,7 @@ def vertice_loss(batch, valid_range=(0,2)):
 
     pred_rotmat = batch['pred_rotmat'] # 72, 24, 3, 3
     pred_betas  = batch['pred_betas']# 72, 10
-    has_smpl = select_valid(batch['has_smpl'], valid_range) # 72
+    has_smpl = batch['has_smpl'] # 72
 
     smpl = batch['smpl']
     device = pred_rotmat.device
@@ -177,8 +162,8 @@ def vertice_loss(batch, valid_range=(0,2)):
     pred_vert = pred_out.vertices
     # gt vertices
     if 'gt_vert' not in batch:
-        gt_pose  = select_valid(batch['pose'], valid_range)
-        gt_betas = select_valid(batch['betas'], valid_range)
+        gt_pose  = batch['pose']
+        gt_betas = batch['betas']
         gt_rotmat = batch_rodrigues(gt_pose.reshape(-1,3)).reshape(-1, 24, 3, 3)
 
         gt_out = smpl(global_orient=gt_rotmat[:,[0]],
@@ -188,7 +173,7 @@ def vertice_loss(batch, valid_range=(0,2)):
         gt_vert = gt_out.vertices
         batch['gt_vert'] = gt_vert
     else:
-        gt_vert = select_valid(batch['gt_vert'], valid_range)
+        gt_vert = batch['gt_vert']
 
     gt_vert = gt_vert[has_smpl == 1]
     pred_vert = pred_vert[has_smpl == 1]

@@ -195,7 +195,7 @@ class Evaluator:
         self.valid_range = (1,1)
         self.chunk_size = 16
 
-        self.visualize_spec = True
+        self.visualize_spec = False
         self.visualize_verticesspec = False # false in emdb_1, true in 3dpw_test_vid
 
 
@@ -209,7 +209,7 @@ class Evaluator:
             - gt_verts: bs * 3, 6890, 3
             - pred_verts: bs * 3, 6890, 3
         '''
-        # batch_size = gt_keypoints_3d.shape[0] # 128, 24, 4
+        batch_size = gt_keypoints_3d.shape[0] # 128, 24, 4
 
         gt_keypoints_3d = gt_keypoints_3d[:, :, :3].detach()
         pred_keypoints_3d = pred_keypoints_3d[:, :, :3].detach()
@@ -218,16 +218,16 @@ class Evaluator:
         gt_valid, pred_valid = self.get_valid_joints(gt_keypoints_3d, 
                                                      pred_keypoints_3d, 
                                                      dataset)
-        # 48, 24, 3 --> 16, 24, 3 (T, J, 3) NOTE(yiwen) we do not change the validation bs
-        gt_valid = select_valid(gt_valid, self.valid_range)
-        pred_valid = select_valid(pred_valid, self.valid_range)
+        # # 48, 24, 3 --> 16, 24, 3 (T, J, 3) NOTE(yiwen) we do not change the validation bs
+        # gt_valid = select_valid(gt_valid, self.valid_range)
+        # pred_valid = select_valid(pred_valid, self.valid_range)
 
         # NOTE(yiwen) fps=30
         if self.visualize_verticesspec: # one time for each validation pass
             self.V6890_TO_V138_mat = self.V6890_TO_V138_mat.to(gt_valid.device)
-            # gt_valid: B, 6890, 3
-            gt_verts = select_valid(gt_verts, self.valid_range)
-            pred_verts = select_valid(pred_verts, self.valid_range)
+            # # gt_valid: B, 6890, 3
+            # gt_verts = select_valid(gt_verts, self.valid_range)
+            # pred_verts = select_valid(pred_verts, self.valid_range)
 
             gt_v138 = torch.matmul(self.V6890_TO_V138_mat, gt_verts) # 16, 6890, 3-->16, 138, 3
             pred_v138 = torch.matmul(self.V6890_TO_V138_mat, pred_verts)
@@ -255,11 +255,10 @@ class Evaluator:
             # cal_spectrogram_similarity(gtnoise_amplitude, pred_amplitude)
             self.visualize_spec = False
         
-        batch_size = self.chunk_size # NOTE(yiwen) only count the current frame (stacked 16)
         # Compute joint errors
         mpjpe, re = eval_pose(pred_valid, gt_valid) # only pass current frame to eval pose
 
-        self.mpjpe[self.counter:self.counter+batch_size] = mpjpe
+        self.mpjpe[self.counter:self.counter+batch_size] = mpjpe # bs*seqlen
         self.re[self.counter:self.counter+batch_size] = re
 
 
@@ -268,13 +267,15 @@ class Evaluator:
             self.pve[self.counter:self.counter+batch_size] = pve * 1000
 
         if self.seq_len is not None:
-            gt = gt_keypoints_3d.reshape(self.chunk_size, -1, num_j, 3).cpu()[:,1:2].reshape(-1, num_j, 3) # 2, 16, 24, 3
-            pred = pred_keypoints_3d.reshape(self.chunk_size, -1, num_j, 3).cpu()[:,1:2].reshape(-1, num_j, 3)
+            gt = gt_keypoints_3d.reshape(-1, self.seq_len, num_j, 3).cpu()
+            pred = pred_keypoints_3d.reshape(-1, self.seq_len, num_j, 3).cpu()
             acc = 0 # NOTE(yiwen) originally calculate the acc error in each window
 
-            acc += compute_error_accel(gt, pred).mean() / 1.0 # len 16 chunk accer calculation
-            self.acc[self.counter:self.counter+batch_size] = acc * 1000 #(30**2)
+            for i in range(len(gt)):
+                acc += compute_error_accel(gt[i], pred[i]).mean() / len(gt)
             
+            self.acc[self.counter:self.counter+batch_size] = acc * 1000 #(30**2)
+            # print(f"current acc {acc}")
         self.counter += batch_size
 
 

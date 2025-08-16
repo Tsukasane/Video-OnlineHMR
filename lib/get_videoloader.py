@@ -12,7 +12,7 @@ def get_dataloaders(cfg=None):
     valid_set = cfg.DATASET.TEST
     partition = cfg.DATASET.PARTITION
 
-    train_seqlen = train_bs + 2 # so it is bs*windows
+    train_seqlen = 16
     train_stride = train_seqlen
     stride = cfg.DATASET.STRIDE
 
@@ -26,9 +26,9 @@ def get_dataloaders(cfg=None):
 
     print('Datasets:', dataset_list)
     print('Partition:', partition)
-
+    
     train = MixedVidDataset(dataset_list, partition, is_train=True, use_augmentation=True,
-                            normalization=True, cropped=True, crop_size=crop_size, 
+                            normalization=True, cropped=True, crop_size=crop_size,
                             seqlen=train_seqlen, stride=train_stride) 
                             # seqlen=stride should be batch_size+2, set the real batch_size=1
                             # then reshape the input to B, window_size=3, ...
@@ -37,8 +37,8 @@ def get_dataloaders(cfg=None):
     
     # NOTE(yiwen) iftest, each window len=3, step=1, total length=seqlen-2
     test = VideoDataset(valid_set, is_train=False, use_augmentation=False, 
-                    normalization=True, cropped=True, crop_size=crop_size, seqlen=3, stride=1) 
-    test_loader = DataLoader(test, batch_size=test_bs, shuffle=False, num_workers=0, drop_last=True)
+                    normalization=True, cropped=True, crop_size=crop_size, seqlen=16, stride=16) 
+    test_loader = DataLoader(test, batch_size=8, shuffle=False, num_workers=num_workers)
 
     # ----------- debug ----------- #
     # import matplotlib.pyplot as plt

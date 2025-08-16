@@ -25,9 +25,9 @@ input_dir = args.input_dir
 # EMDB dataset and splits
 roots = []
 for p in range(10):
-    # if p>1: #NOTE(yiwen) debug
-    #     break
-    folder = f'/edrive2/yiwenzh5/tram_data/EMDB/P{p}'
+    if p>1: #NOTE(yiwen) debug
+        break
+    folder = f'/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/datasets/emdb/EMDB/P{p}'
     root = sorted(glob(f'{folder}/*'))
     roots.extend(root)
 
@@ -103,24 +103,24 @@ for root in tqdm(emdb):
     pred_vert = pred.vertices
     pred_j3d = pred.joints[:, :24]
 
-    pred_camt = torch.tensor(pred_cam['pred_cam_T'])[1:-1]
-    pred_camr = torch.tensor(pred_cam['pred_cam_R'])[1:-1]
+    pred_camt = torch.tensor(pred_cam['pred_cam_T'])
+    pred_camr = torch.tensor(pred_cam['pred_cam_R'])
 
     pred_vert_w = torch.einsum('bij,bnj->bni', pred_camr, pred_vert) + pred_camt[:,None]
     pred_j3d_w = torch.einsum('bij,bnj->bni', pred_camr, pred_j3d) + pred_camt[:,None]
     pred_ori_w = torch.einsum('bij,bjk->bik', pred_camr, pred_rotmat[:,0])
     pred_vert_w, pred_j3d_w = traj_filter(pred_vert_w, pred_j3d_w)
 
-    valid = valid[1:-1]
+    valid = valid
     # Valid mask
 
-    gt_j3d = gt_j3d[1:-1][valid]
-    gt_ori = gt_ori[1:-1][valid]
+    gt_j3d = gt_j3d[valid]
+    gt_ori = gt_ori[valid]
     pred_j3d_w  = pred_j3d_w[valid]
     pred_ori_w = pred_ori_w[valid]
 
-    gt_j3d_cam = gt_j3d_cam[1:-1][valid]
-    gt_vert_cam = gt_vert_cam[1:-1][valid]
+    gt_j3d_cam = gt_j3d_cam[valid]
+    gt_vert_cam = gt_vert_cam[valid]
     pred_j3d = pred_j3d[valid]
     pred_vert = pred_vert[valid]
 

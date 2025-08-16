@@ -12,7 +12,7 @@ DATASET:
   # PARTITION: [1.0]
   LIST: ['3dpw_vid', 'h36m_vid', 'bedlam_vid']
   PARTITION: [0.165, 0.165, 0.67]
-  SEQ_LEN: 3
+  SEQ_LEN: 16
   TEST: 'emdb_1' #'emdb_1' or '3dpw_vid_test'
 
 LOSS:
@@ -23,10 +23,10 @@ LOSS:
 
 
 TRAIN:
-  RESUME:  # if resume training, put the ckpt.pth here
+  RESUME: # if resume training, put the ckpt.pth here
   LOAD_LATEST: True
-  BATCH_SIZE: 36
-  SEQUENCE_BS: 4
+  BATCH_SIZE: 24
+  SEQUENCE_BS: 16
   MULTI_LR: True
   LR: 1e-5
   LR2: 5e-5 # NOTE(yiwen) this is for st module
@@ -57,7 +57,7 @@ MODEL:
   VALID_RANGE: (0,2)
 
 
-EXP_NAME: 'onlinetram_sequence3dataset_newout1612_lr5e-5' # onlineTRAM_sequence
+EXP_NAME: 'onlinetram_debug2_LR2' # onlineTRAM_sequence
 COMMENT:
   'Default configs.'
 

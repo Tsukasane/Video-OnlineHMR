@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 
 
-# TODO(yiwen) check where to use to(device)
 class SpatialAwarePooling(nn.Module):
     def __init__(self, patch_grid=(12, 16), embed_dim=1280, out_dim=128, out_h=4, out_w=3):
         super().__init__()
@@ -70,11 +69,12 @@ class SpaceEmbedding(nn.Module):
 
 class TransformerBlock(nn.Module):
     # TODO(yiwen) try multi blocks inference
-    def __init__(self, hidden_dim, num_heads, dropout=0.1):
+    def __init__(self, hidden_dim, num_heads, max_cache, dropout=0.1):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         self.head_dim = hidden_dim // num_heads
+        self.max_cache = max_cache
 
         # Q/K/V projections for self-attention
         self.q_proj = nn.Linear(hidden_dim, hidden_dim)
@@ -164,6 +164,9 @@ class TransformerBlock(nn.Module):
         v_self_t = self.v_proj_self(x_t)
 
         if 'self_k' in layer_cache:
+            if self.max_cache == layer_cache['self_k'].shape[1]: # FIFO
+                layer_cache['self_k'] = layer_cache['self_k'][:,1:,:]
+                layer_cache['self_v'] = layer_cache['self_v'][:,1:,:]
             layer_cache['self_k'] = torch.cat([layer_cache['self_k'], k_self_t], dim=1)
             layer_cache['self_v'] = torch.cat([layer_cache['self_v'], v_self_t], dim=1)
         else:
@@ -189,6 +192,9 @@ class TransformerBlock(nn.Module):
         v_mem_t = self.v_proj_cross(mem_t)
 
         if 'mem_k' in layer_cache:
+            if self.max_cache == layer_cache['mem_k'].shape[1]: # FIFO
+                layer_cache['mem_k'] = layer_cache['mem_k'][:,1:,:]
+                layer_cache['mem_v'] = layer_cache['mem_v'][:,1:,:]
             layer_cache['mem_k'] = torch.cat([layer_cache['mem_k'], k_mem_t], dim=1)
             layer_cache['mem_v'] = torch.cat([layer_cache['mem_v'], v_mem_t], dim=1)
         else:
@@ -218,11 +224,11 @@ class TransformerBlock(nn.Module):
 
 
 class TransformerStack(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_heads, num_layers, dropout=0.1):
+    def __init__(self, input_dim, hidden_dim, num_heads, num_layers, max_cache, dropout=0.1):
         super().__init__()
         self.pooler = SpatialAwarePooling(patch_grid=(16, 12), embed_dim=input_dim, out_dim=32)
         self.layers = nn.ModuleList([
-            TransformerBlock(hidden_dim, num_heads, dropout) for _ in range(num_layers)
+            TransformerBlock(hidden_dim, num_heads, max_cache, dropout) for _ in range(num_layers)
         ])
 
     def forward(self, q_tokens, img_feats):
@@ -250,221 +256,8 @@ class TransformerStack(nn.Module):
         return out, new_caches # seperately store the cache for each transformer layer
 
 
-
-class KVCacheDecoder(nn.Module):
-    def __init__(self, input_dim=1280, intermediate_feat_dim=512, hidden_dim=512, num_heads=8, max_frames=300): 
-        # TODO(yiwen) the max_frames cannot be too small, need further adapt to sliding window for cache
-        # TODO(yiwen) also need to change the dataloader
-
-        super().__init__()
-        self.hidden_dim = hidden_dim
-        self.num_heads = num_heads
-        self.head_dim = hidden_dim // num_heads
-
-        assert hidden_dim % num_heads == 0
-
-        self.pooler = SpatialAwarePooling(patch_grid=(16, 12), embed_dim=input_dim, out_dim=32)
-
-        # projections
-        self.q_proj = nn.Linear(hidden_dim, hidden_dim)
-        self.k_proj_self = nn.Linear(hidden_dim, hidden_dim)
-        self.v_proj_self = nn.Linear(hidden_dim, hidden_dim)
-
-        self.k_proj_cross = nn.Linear(intermediate_feat_dim, hidden_dim) # memory
-        self.v_proj_cross = nn.Linear(intermediate_feat_dim, hidden_dim)
-        self.out_proj = nn.Linear(hidden_dim, hidden_dim)
-
-        # learnable query tokens (used if none provided)
-        self.learned_query = nn.Parameter(torch.randn(1, max_frames, hidden_dim))
-
-        # FFN
-        self.ffn = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim * 4),
-            nn.ReLU(),
-            nn.Linear(hidden_dim * 4, hidden_dim)
-        )
-
-        # heads
-        self.pose_head = nn.Linear(hidden_dim, 24 * 6)
-        self.shape_head = nn.Linear(hidden_dim, 10)
-        self.cam_head = nn.Linear(hidden_dim, 3)
-
-    def forward(self, img_feats_all, q_tokens=None, device="cpu"):
-        """
-        Training-time forward: use full sequence with causal masking.
-        img_feats_all: [B, T, D_img]
-        q_tokens:      [B, T, D] (optional); if None, use learned_query[:T]
-        Returns: pose, shape, cam, shape = [B, T, ...]
-        """
-        img_feats_all = self.add_pos_to_seqtokens(img_feats_all, device)
-        
-        # NOTE(yiwen) compress frame info to representative patch 某一帧的压缩版重要信息在过往帧中的响应(temporal)
-        img_feats_all = self.pooler(img_feats_all)
-
-        B, T, _ = img_feats_all.shape
-        
-        if q_tokens is None:
-            q_tokens = self.learned_query[:, :T, :].expand(B, T, -1)  # copy batch times --> [B, T, D]
-
-        q = self.q_proj(q_tokens)
-        k_self = self.k_proj_self(q_tokens)
-        v_self = self.v_proj_self(q_tokens)
-        k_cross = self.k_proj_cross(img_feats_all)
-        v_cross = self.v_proj_cross(img_feats_all)
- 
-
-        # --- Self-Attention with causal mask ---
-        q_ = q.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)  # [B, h, T, d]
-        k_ = k_self.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
-        v_ = v_self.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
-
-        attn_scores = torch.matmul(q_, k_.transpose(-2, -1)) / (self.head_dim ** 0.5)  # [B, h, T, T]
-
-        causal_mask = torch.tril(torch.ones(T, T, device=q.device)).bool()
-        attn_scores = attn_scores.masked_fill(causal_mask == 0, float('-inf'))
-
-        attn_weights = F.softmax(attn_scores, dim=-1)
-        attn_output = torch.matmul(attn_weights, v_)  # [B, h, T, d]
-        attn_output = attn_output.transpose(1, 2).reshape(B, T, self.hidden_dim)
-
-        out = attn_output + q  # residual
-
-        # --- Cross-Attention ---
-        q_ = self.q_proj(out).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
-        k_ = k_cross.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
-        v_ = v_cross.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
-
-        cross_scores = torch.matmul(q_, k_.transpose(-2, -1)) / (self.head_dim ** 0.5)
-        cross_weights = F.softmax(cross_scores, dim=-1)
-        cross_out = torch.matmul(cross_weights, v_)
-        cross_out = cross_out.transpose(1, 2).reshape(B, T, self.hidden_dim)
-
-        out = out + cross_out
-        out = out + self.ffn(out)
-
-        pose = self.pose_head(out)    # [B, T, 24*6]
-        shape = self.shape_head(out)  # [B, T, 10]
-        cam = self.cam_head(out)      # [B, T, 3]
-
-        return pose, shape, cam
-
-    def inference_step(self, q_tokens=None, img_feat_t=None, cache=None, t=None, device="cpu"):
-        """
-        q_tokens: [B, 1, D]  - current query token
-        img_feat_t: [B, 1, D_img] - image feature of current frame (1-step)
-        cache: {
-            'self_k': [B, T_accumulate, D],
-            'self_v': [B, T_accumulate, D],
-            'mem_k': [B, T_accumulate, D],
-            'mem_v': [B, T_accumulate, D]
-        }
-        t: current time index (used for learned query)
-        """
-
-        img_feat_t = self.add_pos_to_seqtokens(img_feat_t, device) # NOTE(yiwen) check this
-        
-        # NOTE(yiwen) compress frame info to representative patch 某一帧的压缩版重要信息在过往帧中的响应(temporal)
-        img_feat_t = self.pooler(img_feat_t)
-        B = img_feat_t.size(0)
-
-        if q_tokens is None:
-            assert t is not None
-            q_tokens = self.learned_query[:, t:t+1, :].expand(B, 1, -1)  # [B, 1, D] the first clue for all batches
-
-        q = self.q_proj(q_tokens)              # [B, 1, D]
-        k_self = self.k_proj_self(q_tokens)    # [B, 1, D]
-        v_self = self.v_proj_self(q_tokens)
-
-        k_cross = self.k_proj_cross(img_feat_t) 
-        v_cross = self.v_proj_cross(img_feat_t)
-
-        if cache is None:
-            cache = {}
-
-        # ----- Update cache -----
-        if 'self_k' in cache:
-            cache['self_k'] = torch.cat([cache['self_k'], k_self], dim=1)  # [B, T+1, D]
-            cache['self_v'] = torch.cat([cache['self_v'], v_self], dim=1)
-        else:
-            cache['self_k'] = k_self
-            cache['self_v'] = v_self
-
-        if 'mem_k' in cache:
-            cache['mem_k'] = torch.cat([cache['mem_k'], k_cross], dim=1)
-            cache['mem_v'] = torch.cat([cache['mem_v'], v_cross], dim=1)
-        else:
-            cache['mem_k'] = k_cross
-            cache['mem_v'] = v_cross
-
-        # ----- Self-Attention (causal) -----
-        q_ = q.view(B, 1, self.num_heads, self.head_dim).transpose(1, 2)      # [B, h, 1, d]
-        k_ = cache['self_k'].view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)  # [B, h, T, d]
-        v_ = cache['self_v'].view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
-
-        attn_weights = torch.matmul(q_, k_.transpose(-2, -1)) / (self.head_dim ** 0.5)  # [B, h, 1, T]
-        attn_weights = F.softmax(attn_weights, dim=-1)
-        attn_output = torch.matmul(attn_weights, v_)  # [B, h, 1, d] same as q shape
-        attn_output = attn_output.transpose(1, 2).reshape(B, 1, self.hidden_dim)  # [B, 1, D=h*d]
-
-        out = attn_output + q  # residual
-
-        # ----- Cross-Attention (on memory) -----
-        q_ = self.q_proj(out).view(B, 1, self.num_heads, self.head_dim).transpose(1, 2)
-        k_ = cache['mem_k'].view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
-        v_ = cache['mem_v'].view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
-
-        cross_attn_weights = torch.matmul(q_, k_.transpose(-2, -1)) / (self.head_dim ** 0.5)
-        cross_attn_weights = F.softmax(cross_attn_weights, dim=-1)
-        cross_output = torch.matmul(cross_attn_weights, v_)
-        cross_output = cross_output.transpose(1, 2).reshape(B, 1, self.hidden_dim)
-
-        out = out + cross_output  # residual
-
-        # ----- Feed-Forward -----
-        out = out + self.ffn(out)
-
-        # ----- Output Heads -----
-        pose = self.pose_head(out)    # [B, 1, 24*6]
-        shape = self.shape_head(out)  # [B, 1, 10]
-        cam = self.cam_head(out)      # [B, 1, 3]
-
-        return pose, shape, cam, cache
-
-
-    def add_pos_to_seqtokens(self, x, device):
-        """
-        x: [B, T, N_patch, D]
-        Seperately encode time and space
-        """
-        B, T, N_patch, D = x.shape
-
-        H = 16
-        W = 12
-        assert H * W == N_patch, f"cannot be reshape to meshgrid"
-
-        # --- 时间编码 ---
-        time_ids = torch.linspace(0, 1, T, device=device)  # [T]
-        time_pos = self.timepos_encoder(time_ids)  # 预先在 __init__ 里定义 MLP/sinusoidal
-
-        # --- 空间编码 ---
-        grid_y, grid_x = torch.meshgrid(torch.arange(H, device=device),
-                                        torch.arange(W, device=device),
-                                        indexing='ij')
-        coords = torch.stack([grid_y, grid_x], dim=-1).float()  # [H, W, 2]
-        coords = coords / torch.tensor([H, W], device=device).float()  # 归一化
-        coords = coords.view(-1, 2)  # [N_patch, 2]
-        space_pos = self.spacepos_encoder(coords)  # [N_patch, D]
-
-        # --- 位置编码相加 ---
-        x = x + time_pos[None, :, None, :] + space_pos[None, None, :, :]  # 广播
-
-        return x  # 仍是 [B, T, N_patch, D]
-
-
-
-
 class SMPLDecoderModel(nn.Module):
-    def __init__(self, input_dim=1280, hidden_dim=512, num_heads=4, max_frames=400, num_layers=4, device="cuda"): #input_dim=1280, intermediate_feat_dim=512, hidden_dim=512, num_heads=8, max_frames=300
+    def __init__(self, input_dim=1280, hidden_dim=512, num_heads=4, max_frames=400, num_layers=4, max_cache=300, device="cuda"): #input_dim=1280, intermediate_feat_dim=512, hidden_dim=512, num_heads=8, max_frames=300
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
@@ -472,9 +265,11 @@ class SMPLDecoderModel(nn.Module):
         self.out_w = 3
         self.pooler_out_dim = 32
         self.device = device
+        self.max_frames = max_frames # upper bound typically for training
+        self.max_cache = max_cache # upper bound typically for inference
 
         self.learned_query = nn.Parameter(torch.randn(1, max_frames, hidden_dim))  # 不同的t index可能有不同的intermediate feature
-        self.stack = TransformerStack(input_dim, hidden_dim, num_heads, num_layers)
+        self.stack = TransformerStack(input_dim, hidden_dim, num_heads, num_layers, max_cache)
 
         self.pooler = SpatialAwarePooling(patch_grid=(16, 12), embed_dim=input_dim, out_dim=self.pooler_out_dim, out_h=self.out_h, out_w=self.out_w)
 
@@ -548,7 +343,9 @@ class SMPLDecoderModel(nn.Module):
         B = img_feat_t.size(0)
 
         if q_tokens is None:
-            assert t is not None, "inference_step 需要提供 t 或显式传入 q_tokens"
+            assert t is not None, "inference_step requires t or explicit q_tokens"
+            if t >= self.max_cache:
+                t = self.max_cache - 1 # NOTE(yiwen) relative position in cache
             q_tokens = self.learned_query[:, t:t+1, :].expand(B, 1, -1)   # [B,1,D]
 
         img_feat_t = self.input_proj(img_feat_t)

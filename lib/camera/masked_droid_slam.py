@@ -32,6 +32,7 @@ def run_metric_slam(img_folder, masks=None, calib=None, is_static=False):
     imgfiles = sorted(glob(f'{img_folder}/*.jpg'))
 
     ##### If static camera, simply return static camera motion #####
+    # NOTE(yiwen) seems to be relative r and t across different frames
     if is_static:
         pred_cam_t = torch.zeros([len(imgfiles), 3])
         pred_cam_r = torch.eye(3).expand(len(imgfiles), 3, 3)
@@ -46,7 +47,7 @@ def run_metric_slam(img_folder, masks=None, calib=None, is_static=False):
     del droid
     torch.cuda.empty_cache()
 
-    ##### Estimate Metric Depth #####
+    ##### Estimate Metric Depth ##### NOTE(yiwen) can be online (image input)
     repo = "isl-org/ZoeDepth"
     model_zoe_n = torch.hub.load(repo, "ZoeD_N", pretrained=True)
     _ = model_zoe_n.eval()
@@ -76,9 +77,9 @@ def run_metric_slam(img_folder, masks=None, calib=None, is_static=False):
         else:
             msk = masks[t].numpy()
 
-        scale = est_scale_hybrid(slam_depth, pred_depth, msk=msk)
+        scale = est_scale_hybrid(slam_depth, pred_depth, msk=msk) # NOTE(yiwen) can be online, per frame scale
         scales_.append(scale)
-    scale = np.median(scales_)
+    scale = np.median(scales_) # NOTE(yiwen) 加权平均
     
     # convert to metric-scale camera extrinsics: R_wc, T_wc
     pred_cam_t = torch.tensor(traj[:, :3]) * scale
@@ -92,10 +93,10 @@ def run_slam(imagedir, masks=None, calib=None, depth=None):
     """ Maksed DROID-SLAM """
     droid = None
     if calib is None:
-        calib = est_calib(imagedir)
+        calib = est_calib(imagedir) # NOTE(yiwen) can be online
 
     if masks is not None:
-        img_msks, conf_msks = preprocess_masks(imagedir, masks)
+        img_msks, conf_msks = preprocess_masks(imagedir, masks) # NOTE(yiwen) can be online
 
     for (t, image, intrinsics) in tqdm(image_stream(imagedir, calib)):
 

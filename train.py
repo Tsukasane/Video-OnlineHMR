@@ -71,9 +71,9 @@ def main(cfg):
         #     params.append({'params': [p for p in model.st_module.parameters() if p.requires_grad], 
         #                    'lr':cfg.TRAIN.LR2})
         
-        optimizer = torch.optim.AdamW(params, lr=cfg.TRAIN.LR, weight_decay=cfg.TRAIN.WD) # TODO(yiwen) further check dataloader and parameter update logistic
+        optimizer = torch.optim.AdamW(params, lr=cfg.TRAIN.LR2, weight_decay=cfg.TRAIN.WD) # TODO(yiwen) further check dataloader and parameter update logistic
         
-        logger.info(f'Using learning rates:[{cfg.TRAIN.LR}] and WD: {cfg.TRAIN.WD}')
+        logger.info(f'Using learning rates:[{cfg.TRAIN.LR2}] and WD: {cfg.TRAIN.WD}')
         # logger.info(f'Using multiple learning rates:[{cfg.TRAIN.LR}, {cfg.TRAIN.LR2}] and WD: {cfg.TRAIN.WD}')
     else:
         optimizer = torch.optim.AdamW(params=[p for p in model.parameters() if p.requires_grad], 

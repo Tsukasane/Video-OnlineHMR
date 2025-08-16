@@ -12,28 +12,6 @@ def select_valid(batch_tensor, valid_range):
 
     return batch_tensor
 
-def move_last_dim_to_third(tensor: torch.Tensor):
-    """
-    Move the last dimension to the second dimension.
-    """
-    dims = list(range(tensor.dim()))
-    last = dims.pop()       # remove -1 (last)
-    dims.insert(2, last)    # insert last dim into second position
-    return tensor.permute(*dims)
-
-
-def slice_to_small_chunk(ori_chunk, chunk_len=3, stride=1):
-    """
-    Slice big chunk (B, 26,...) from the same video sequence to small chunks (B*3,...), B=24
-    """
-    windows = ori_chunk.unfold(dimension=1, size=chunk_len, step=stride)
-    
-    windows = move_last_dim_to_third(windows)
-    windows = windows.flatten(1,2)
-
-    # print(f'debug -- windows.shape {windows.shape}')
-
-    return windows
 
 class Trainer(BaseTrainer):
 
@@ -53,15 +31,12 @@ class Trainer(BaseTrainer):
 
             # 72, 24, 4     B*window_size, 24, 4'
             
-            # batch = {k: v.flatten(0, 1) for k, v in batch.items() if type(v)==torch.Tensor} # TODO(yiwen) check why flatten here
+            batch = {k: v.flatten(0, 1) for k, v in batch.items() if type(v)==torch.Tensor}
             # ['img_idx', 'img_focal', 'img_center', 'img', 'pose', 'betas', 'pose_3d', 'keypoints', 'scale', 'center', 'has_smpl', 'has_pose_3d']
             # [26, 1]  [26]  [26, 2]  [26, 3, 256, 256]  [26, 72]  [26, 10]  [26, 24, 4]  [26, 49, 3]  [26]  [26, 2]  [26]  [26]
 
-            batch = {k: slice_to_small_chunk(v) for k, v in batch.items() if type(v)==torch.Tensor} # NOTE(yiwen) first do other process, then to(device)
-            batch = {k: v.flatten(0,1).to(self.device) for k, v in batch.items()}
+            batch = {k: v.to(self.device) for k, v in batch.items()} # continuous
 
-            # import pdb
-            # pdb.set_trace()
             batch['beta_weight'] = self.cfg.TRAIN.SMPL_BETA
             batch['smpl'] = self.model.smpl
 
@@ -161,7 +136,7 @@ class Trainer(BaseTrainer):
         # evaluator = Evaluator(dataset_length=len(db.imgname),
         #                       seq_len=getattr(model, 'seq_len', None))
         evaluator = Evaluator(dataset_length=len(db.imgname),
-                              seq_len=self.valid_range[1]-self.valid_range[0]+1)
+                              seq_len=getattr(model, 'seq_len', None))
         J_regressor = db.J_regressor.to(device)
 
         for i, batch in enumerate(loader):
@@ -178,7 +153,9 @@ class Trainer(BaseTrainer):
                 # NOTE(yiwen) set is_train=True in training and validation
                 # NOTE(yiwen) still use the same workflow for train and validation
                 out, _ = model(batch, self.valid_range, is_train=False, is_valid=True, iters=update_iter) # 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
-
+                # out.keys() ['pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full']
+                # [B, 3] [B, 144] [B, 10] [B, 24, 3, 3] [B, 24, 3, 3] [B, 1, 3]
+                
                 if '3dpw' in db.dataset: # TODO(yiwen) temporally use 3dpw as evalset to see vertices performance
                     mode = '3dpw'
                     smpl_out = model.smpl.query(out) # input ['pred_rotmat'] ['pred_shape']
@@ -188,7 +165,7 @@ class Trainer(BaseTrainer):
 
                     pred_keypoints_3d = torch.matmul(J_regressor_batch, pred_vertices)
                     pred_pelvis = pred_keypoints_3d[:, [0],:].clone()
-                    pred_keypoints_3d = pred_keypoints_3d - pred_pelvis
+                    pred_keypoints_3d = pred_keypoints_3d - pred_pelvis # NOTE(yiwen) move to pelvis (0,0)
 
                 elif 'emdb' in db.dataset: # emdb_1 v
                     mode = 'emdb'
@@ -199,8 +176,6 @@ class Trainer(BaseTrainer):
                     pred_keypoints_3d = pred_keypoints_3d - pred_pelvis # NOTE(yiwen) only focus on relative motion, not absolute position
                     
             # evaluation
-            gt_keypoints_3d = select_valid(gt_keypoints_3d, self.valid_range)
-            # TODO(yiwen) get vertices from joint
             evaluator(gt_keypoints_3d, pred_keypoints_3d, mode, gt_vertices, pred_vertices)
 
         re = evaluator.re[:evaluator.counter].mean()
