@@ -6,13 +6,6 @@ from lib.utils.pose_utils import Evaluator
 
 logger = logging.getLogger(__name__)
 
-def select_valid(batch_tensor, valid_range):
-    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[1]+1]
-    batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
-
-    return batch_tensor
-
-
 class Trainer(BaseTrainer):
 
     def _init_fn(self):
@@ -151,10 +144,15 @@ class Trainer(BaseTrainer):
                 # batch.keys() ['img_idx', 'img_focal', 'img_center', 'img', 'pose', 'betas', 'pose_3d', 'gt_verts', 'keypoints', 'scale', 'center', 'has_smpl', 'has_pose_3d']
                 
                 # NOTE(yiwen) set is_train=True in training and validation
-                # NOTE(yiwen) still use the same workflow for train and validation
-                out, _ = model(batch, self.valid_range, is_train=False, is_valid=True, iters=update_iter) # 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
+                # NOTE(yiwen) Option1: still use the same workflow for train and validation
+                # out, _ = model(batch, self.valid_range, is_train=False, is_valid=True, iters=update_iter) # 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
                 # out.keys() ['pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full']
                 # [B, 3] [B, 144] [B, 10] [B, 24, 3, 3] [B, 24, 3, 3] [B, 1, 3]
+
+                # NOTE(yiwen) Option2: use the test/inference workflow
+                out, _ = model.inference_forward(batch) # default is inference mode
+                
+                # out.keys() 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
                 
                 if '3dpw' in db.dataset: # TODO(yiwen) temporally use 3dpw as evalset to see vertices performance
                     mode = '3dpw'

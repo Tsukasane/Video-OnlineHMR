@@ -68,7 +68,6 @@ class SpaceEmbedding(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    # TODO(yiwen) try multi blocks inference
     def __init__(self, hidden_dim, num_heads, max_cache, dropout=0.1):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -163,7 +162,7 @@ class TransformerBlock(nn.Module):
         k_self_t = self.k_proj_self(x_t)   # [B,1,D]
         v_self_t = self.v_proj_self(x_t)
 
-        if 'self_k' in layer_cache:
+        if 'self_k' in layer_cache: # NOTE(yiwen) max_cache=2, only previous and current
             if self.max_cache == layer_cache['self_k'].shape[1]: # FIFO
                 layer_cache['self_k'] = layer_cache['self_k'][:,1:,:]
                 layer_cache['self_v'] = layer_cache['self_v'][:,1:,:]
@@ -300,7 +299,7 @@ class SMPLDecoderModel(nn.Module):
 
         return pose, shape, cam
 
-    def add_pos_to_seqtokens(self, x, device):
+    def add_pos_to_seqtokens(self, x, device, t=None):
         """
         x: [B, T, N_patch, D]
         Seperately encode time and space
@@ -311,7 +310,10 @@ class SMPLDecoderModel(nn.Module):
         W = 12
         assert H * W == N_patch, f"cannot be reshape to meshgrid"
 
-        time_ids = torch.linspace(0, 1, T, device=device)  # [T]
+        if T==1: # single frame inference
+            time_ids = torch.tensor([1.0], device=device) # always corresponds to the last frame in cache sequence
+        else:
+            time_ids = torch.linspace(0, 1, T, device=device)  # [T]
         time_pos = self.timepos_encoder(time_ids)
 
         grid_y, grid_x = torch.meshgrid(torch.arange(H, device=device),
@@ -338,7 +340,7 @@ class SMPLDecoderModel(nn.Module):
         }
         """
         # 先加Pos，再pool
-        img_feat_t = self.add_pos_to_seqtokens(img_feat_t, device)  # [B,1,Np,D]
+        img_feat_t = self.add_pos_to_seqtokens(img_feat_t, device, t)  # [B,1,Np,D]
         img_feat_t = self.pooler(img_feat_t)                        # [B,1,D]
         B = img_feat_t.size(0)
 

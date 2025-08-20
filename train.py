@@ -58,7 +58,7 @@ def main(cfg):
     logger.info(f'Loaded pretrained checkpoint {checkpoint}')
     logger.info(f'Freeze pretrained backbone')
 
-    if cfg.TRAIN.MULTI_LR:
+    if cfg.TRAIN.MULTI_LR: # TODO(yiwen) modify the config here
         params = [{'params': [p for p in model.smpl_decoder.parameters() if p.requires_grad]}]
 
         # params = [{'params': [p for p in model.smpl_head.parameters() if p.requires_grad]}]

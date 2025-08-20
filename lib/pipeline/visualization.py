@@ -33,7 +33,7 @@ def visualize_tram(seq_folder, floor_scale=2, bin_size=-1, max_faces_per_bin=300
     ##### TRAM + VIMO #####
     pred_cam = np.load(f'{seq_folder}/camera.npy', allow_pickle=True).item()
     img_focal = pred_cam['img_focal'].item()
-    world_cam_R = torch.tensor(pred_cam['world_cam_R']).to(device)
+    world_cam_R = torch.tensor(pred_cam['world_cam_R']).to(device) # T, 3, 3
     world_cam_T = torch.tensor(pred_cam['world_cam_T']).to(device)
 
     for i in range(max_track):
@@ -54,11 +54,8 @@ def visualize_tram(seq_folder, floor_scale=2, bin_size=-1, max_faces_per_bin=300
                     transl=pred_trans.squeeze(),
                     pose2rot=False, 
                     default_smpl=True)
-        pred_vert = pred.vertices
-        pred_j3d = pred.joints[:, :24]
-
-        switch = world_cam_R[frame].shape[0] - pred_vert.shape[0]
-        frame = frame[:-switch]
+        pred_vert = pred.vertices # T, 6890, 3
+        pred_j3d = pred.joints[:, :24] # T, 24, 3
 
         cam_r = world_cam_R[frame]
         cam_t = world_cam_T[frame]

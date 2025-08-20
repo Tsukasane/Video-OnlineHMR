@@ -1,5 +1,17 @@
 # Video-Based Online Human Mesh Recovery
-
+temporal encoding 的时候 inference 用0或者1 的区别不大
+确认一下tram st_module 的地方 h*w reshape到batch上，这样相当于查询每个patch自己的时序相关；然后再 b和t放在一起，换到image层面上decode 当前帧的smpl
+smpl decoder在init pose基础上去做 /ocean/projects/cis240055p/yzhao16/tram/lib/models/modules.py
+过往帧的信息太多，少一点信息的使用，可以少一点patch，当前帧可以用更多的patch，试试加权
+try reshape to batch
+change causal attention to sliding window attention
+the order of self and cross atten, does q in cache really mean something?
+one frame, all patch, info moves to D dimension (spatial --> channel)
+haven't add the bbox
+# Findings
+# 在highly dynamics的setting下估计很差，在有occlusion的情况下还可以
+    - use shorter memory in cache? --> first visualize the correspondense in temporal transformer, which prev frame has higher correspondense?
+    - eliminate the pooling, since in some regions the detailed body pose seems inaccurate. Probably the spatial feature shouldn't be further compressed, as the 16*12 feature map is already a downsampled version.
 # Causal Transformer Decoder Arch
 # input: B, T, H, W, C  H*W=num_patch
 # training: windowsize=16, tril mask to apply attention
