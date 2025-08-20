@@ -150,7 +150,7 @@ class Trainer(BaseTrainer):
                 # [B, 3] [B, 144] [B, 10] [B, 24, 3, 3] [B, 24, 3, 3] [B, 1, 3]
 
                 # NOTE(yiwen) Option2: use the test/inference workflow
-                out, _ = model.inference_forward(batch) # default is inference mode
+                out, _ = model.inference_forward(batch, is_valid=True) # default is inference mode
                 
                 # out.keys() 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
                 

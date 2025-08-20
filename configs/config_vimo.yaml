@@ -10,6 +10,7 @@ DATASET:
   # PARTITION: [0.5, 0.5]
   # LIST: ['3dpw_vid']
   # PARTITION: [1.0]
+  # TODO(yiwen) clean the config
   LIST: ['3dpw_vid', 'h36m_vid', 'bedlam_vid']
   PARTITION: [0.165, 0.165, 0.67]
   SEQ_LEN: 16
@@ -26,7 +27,7 @@ TRAIN:
   RESUME: # if resume training, put the ckpt.pth here
   LOAD_LATEST: True
   BATCH_SIZE: 24
-  SEQUENCE_BS: 16
+  SEQUENCE_BS: 20
   MULTI_LR: True
   LR: 1e-5
   LR2: 5e-5 # NOTE(yiwen) this is for st module
@@ -57,7 +58,7 @@ MODEL:
   VALID_RANGE: (0,2)
 
 
-EXP_NAME: 'onlinetram_debug2_LR2' # onlineTRAM_sequence
+EXP_NAME: 'online_videohmrv2' # onlineTRAM_sequence
 COMMENT:
   'Default configs.'
 

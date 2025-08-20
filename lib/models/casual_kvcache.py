@@ -4,6 +4,11 @@ import torch.nn.functional as F
 
 import torch
 import torch.nn as nn
+import einops
+
+from .components.pose_transformer import TransformerDecoder
+
+import numpy as np
 
 
 class SpatialAwarePooling(nn.Module):
@@ -255,9 +260,71 @@ class TransformerStack(nn.Module):
         return out, new_caches # seperately store the cache for each transformer layer
 
 
+class SMPLTransformerDecoderHead(nn.Module): # use the context from one image
+    """ HMR2 Cross-attention based SMPL Transformer decoder
+    """
+    def __init__(self, ):
+        super().__init__()
+        transformer_args = dict(
+            depth = 6,  # originally 6
+            heads = 8,
+            mlp_dim = 1024,
+            dim_head = 64,
+            dropout = 0.0,
+            emb_dropout = 0.0,
+            norm = "layer",
+            context_dim = 512,
+            num_tokens = 1,
+            token_dim = 1,
+            dim = 1024
+            )
+        self.transformer = TransformerDecoder(**transformer_args)
+
+        dim = 1024
+        npose = 24*6
+        self.decpose = nn.Linear(dim, npose)
+        self.decshape = nn.Linear(dim, 10)
+        self.deccam = nn.Linear(dim, 3)
+        nn.init.xavier_uniform_(self.decpose.weight, gain=0.01)
+        nn.init.xavier_uniform_(self.decshape.weight, gain=0.01)
+        nn.init.xavier_uniform_(self.deccam.weight, gain=0.01)
+
+        mean_params = np.load('data/smpl/smpl_mean_params.npz')
+        init_body_pose = torch.from_numpy(mean_params['pose'].astype(np.float32)).unsqueeze(0)
+        init_betas = torch.from_numpy(mean_params['shape'].astype('float32')).unsqueeze(0)
+        init_cam = torch.from_numpy(mean_params['cam'].astype(np.float32)).unsqueeze(0)
+        self.register_buffer('init_body_pose', init_body_pose)
+        self.register_buffer('init_betas', init_betas)
+        self.register_buffer('init_cam', init_cam)
+
+        
+    def forward(self, x, **kwargs):
+
+        batch_size = x.shape[0]
+        # vit pretrained backbone is channel-first. Change to token-first
+        x = einops.rearrange(x, 'b c h w -> b (h w) c')
+
+        init_body_pose = self.init_body_pose.expand(batch_size, -1)
+        init_betas = self.init_betas.expand(batch_size, -1)
+        init_cam = self.init_cam.expand(batch_size, -1)
+
+        # Pass through transformer
+        token = torch.zeros(batch_size, 1, 1).to(x.device)
+        token_out = self.transformer(token, context=x)
+        token_out = token_out.squeeze(1) # (B, C)
+
+        # Readout from token_out
+        pred_pose = self.decpose(token_out)  + init_body_pose
+        pred_shape = self.decshape(token_out)  + init_betas
+        pred_cam = self.deccam(token_out)  + init_cam
+
+        return pred_pose, pred_shape, pred_cam
+
+
 class SMPLDecoderModel(nn.Module):
     def __init__(self, input_dim=1280, hidden_dim=512, num_heads=4, max_frames=400, num_layers=4, max_cache=300, device="cuda"): #input_dim=1280, intermediate_feat_dim=512, hidden_dim=512, num_heads=8, max_frames=300
         super().__init__()
+        self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.out_h = 4
@@ -272,30 +339,33 @@ class SMPLDecoderModel(nn.Module):
 
         self.pooler = SpatialAwarePooling(patch_grid=(16, 12), embed_dim=input_dim, out_dim=self.pooler_out_dim, out_h=self.out_h, out_w=self.out_w)
 
-        self.pose_head = nn.Linear(hidden_dim, 24 * 6)
-        self.shape_head = nn.Linear(hidden_dim, 10)
-        self.cam_head = nn.Linear(hidden_dim, 3)
+        self.smpl_head = SMPLTransformerDecoderHead()
 
         self.timepos_encoder = ContinuousTimeEmbedding(d_model=input_dim, device=self.device)
         self.spacepos_encoder = SpaceEmbedding(d_model=input_dim, device=self.device)
 
-        self.input_proj = nn.Linear(self.out_h*self.out_w*self.pooler_out_dim, hidden_dim)
+        self.input_proj = nn.Linear(self.input_dim, hidden_dim) # self.out_h*self.out_w*self.pooler_out_dim
 
     def forward(self, img_feats_all, q_tokens=None):
 
         img_feats_all = self.add_pos_to_seqtokens(img_feats_all, self.device) # NOTE(yiwen) check this
-        img_feats_all = self.pooler(img_feats_all)  # NOTE(yiwen) compress frame info to representative patch 某一帧的压缩版重要信息在过往帧中的响应(temporal)
+        batch_size = img_feats_all.shape[0]
+
+        img_feats_all = einops.rearrange(img_feats_all, 'b t (h w) c -> (b h w) t c', b=batch_size, h=16, w=12) # b*h*w, 
+        # img_feats_all = self.pooler(img_feats_all)  # NOTE(yiwen) compress frame info to representative patch 某一帧的压缩版重要信息在过往帧中的响应(temporal)
         
-        B, T, _ = img_feats_all.shape
+        BN, T, _ = img_feats_all.shape
         if q_tokens is None:
-            q_tokens = self.learned_query[:, :T, :].expand(B, T, -1)
+            q_tokens = self.learned_query[:, :T, :].expand(BN, T, -1) # patch level query
+        
+        img_feats_all = self.input_proj(img_feats_all) # BN, T, 512
 
-        img_feats_all = self.input_proj(img_feats_all)
+        # the stack of transformer lys
+        out = self.stack(q_tokens, img_feats_all) # BN, T, 512
+        # get the image level feature
+        out = einops.rearrange(out, '(b h w) t c -> (b t) c h w', b=batch_size, h=16, w=12) 
+        pose, shape, cam = self.smpl_head(out)
 
-        out = self.stack(q_tokens, img_feats_all)
-        pose = self.pose_head(out)
-        shape = self.shape_head(out)
-        cam = self.cam_head(out)
 
         return pose, shape, cam
 
@@ -341,24 +411,27 @@ class SMPLDecoderModel(nn.Module):
         """
         # 先加Pos，再pool
         img_feat_t = self.add_pos_to_seqtokens(img_feat_t, device, t)  # [B,1,Np,D]
-        img_feat_t = self.pooler(img_feat_t)                        # [B,1,D]
-        B = img_feat_t.size(0)
+        batch_size = img_feat_t.shape[0]
+        # img_feat_t = self.pooler(img_feat_t)                        # [B,1,D]
+        img_feat_t = einops.rearrange(img_feat_t, 'b t (h w) c -> (b h w) t c', b=batch_size, h=16, w=12) 
+        BN = img_feat_t.size(0) # we have a q for each patch this time
 
         if q_tokens is None:
             assert t is not None, "inference_step requires t or explicit q_tokens"
             if t >= self.max_cache:
                 t = self.max_cache - 1 # NOTE(yiwen) relative position in cache
-            q_tokens = self.learned_query[:, t:t+1, :].expand(B, 1, -1)   # [B,1,D]
+            q_tokens = self.learned_query[:, t:t+1, :].expand(BN, 1, -1)   # [B,1,D]
 
         img_feat_t = self.input_proj(img_feat_t)
 
         cache_layers = cache['layers'] if (cache is not None and 'layers' in cache) else None
         out, new_cache_layers = self.stack.incremental_step(q_tokens, img_feat_t, cache_layers)
 
-        pose  = self.pose_head(out)     # [B,1,24*6]
-        shape = self.shape_head(out)    # [B,1,10]
-        cam   = self.cam_head(out)      # [B,1,3]
+        out = einops.rearrange(out, '(b h w) t c -> (b t) c h w', b=batch_size, h=16, w=12)
 
+        pose, shape, cam = self.smpl_head(out)
+
+        
         new_cache = {'layers': new_cache_layers}
         return pose, shape, cam, new_cache
 
@@ -366,7 +439,7 @@ class SMPLDecoderModel(nn.Module):
 
 if __name__=="__main__":
 
-    train = False
+    train = True
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # decoder = KVCacheDecoder(intermediate_feat_dim=384, hidden_dim=512).to(device)
@@ -375,8 +448,7 @@ if __name__=="__main__":
     # NOTE(yiwen) init dummy input  batch=2, seq_len=4, 1280 feats channels, 64x48 resolution
     B, T, D, H, W = 2, 250, 1280, 16, 12 # if not using bbox 3 dim here.
     N_patch = H*W
-    x = torch.randn(B, T, H*W, D).to(device)
-
+    x = torch.randn(B, T, N_patch, D).to(device)
 
     if train:
         print(f"input shape: {x.shape}")  # [B, T, N_patch, D] = [2, 4*192, 1280]

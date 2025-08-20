@@ -69,10 +69,9 @@ class HMR_VIMO(nn.Module):
         img_focal = batch['img_focal'] # B*T
         img_center = batch['img_center'] # B*T, 2
 
+        # TODO(yiwen) pass through configs to function
         if is_train:
-            batch_size = self.train_bs # TODO(yiwen) pass through configs to function
-        if is_valid:
-            batch_size = self.valid_bs
+            batch_size = 16
         else:
             batch_size = 1
 
@@ -89,11 +88,9 @@ class HMR_VIMO(nn.Module):
         bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12) 
         # feature = torch.cat([feature, bb], dim=1) # B*3=48, 1283, 16, 12 NOTE(yiwen) image + human bbox --> if we don't use this bbox info
 
-        import pdb
-        pdb.set_trace()
         # patch level -->
-        feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only
-        
+        feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only, use input in this shape to add spatial and temporal emcoding
+    
         # NOTE(yiwen) casual transformer
         pred_pose, pred_shape, pred_cam = self.smpl_decoder(img_feats_all=feature)
         pred_pose = pred_pose.reshape(-1, pred_pose.shape[-1]) # B*T, 144
