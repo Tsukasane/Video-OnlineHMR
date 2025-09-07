@@ -193,6 +193,7 @@ class Trainer(BaseTrainer):
         self.writer.add_scalar(f"Validation/MPJPE", mpjpe, self.global_step)
         self.writer.add_scalar(f"Validation/ACCEL", acc, self.global_step)
         self.writer.add_scalar(f"Validation/JITTER", jitter, self.global_step)
+        self.writer.add_scalar(f"Validation/JITTER_GT", jitter_gt, self.global_step)
         self.writer.flush()
 
         self.model.train()
@@ -201,9 +202,6 @@ class Trainer(BaseTrainer):
         self.performance_type = 'min'
 
         torch.cuda.empty_cache()
-
-        breakpoint()
-
         return re
 
     def upload_additional(self, step):

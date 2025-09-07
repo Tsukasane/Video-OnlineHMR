@@ -60,7 +60,7 @@ MODEL:
   VALID_RANGE: (0,2)
 
 
-EXP_NAME: 'online_videohmrv2_w_bb_nolrschduler' # onlineTRAM_sequence
+EXP_NAME: 'online_videohmrv2_wmask' # onlineTRAM_sequence
 COMMENT:
   'Default configs.'
 

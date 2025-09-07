@@ -187,7 +187,12 @@ class HMR_VIMO(nn.Module):
             pred_pose, pred_shape, pred_cam = [], [], []
             for t in range(inference_seqlen):
                 dummy_inferenceinput = feature[:, t:t+1, :, :]
-                smpl_pose, smpl_shape, smpl_cam, cache = self.smpl_decoder.inference_step(img_feat_t=dummy_inferenceinput, t=t, device=device, cache=cache)
+                q_token2 = einops.rearrange(dummy_inferenceinput, 'b t (h w) c -> (b h w) t c', b=batch_size, h=16, w=12)
+                smpl_pose, smpl_shape, smpl_cam, cache = self.smpl_decoder.inference_step(img_feat_t=dummy_inferenceinput, 
+                                                                                          q_tokens=q_token2, 
+                                                                                          t=t, 
+                                                                                          device=device, 
+                                                                                          cache=cache)
                 pred_pose.append(smpl_pose)
                 pred_shape.append(smpl_shape)
                 pred_cam.append(smpl_cam)
@@ -197,7 +202,8 @@ class HMR_VIMO(nn.Module):
             
         else:
             # NOTE(yiwen) casual transformer
-            pred_pose, pred_shape, pred_cam = self.smpl_decoder(img_feats_all=feature)
+            q_token2 = einops.rearrange(feature, 'b t (h w) c -> (b h w) t c', b=batch_size, h=16, w=12)
+            pred_pose, pred_shape, pred_cam = self.smpl_decoder(img_feats_all=feature, q_tokens=q_token2)
 
 
         pred_pose = pred_pose.reshape(-1, pred_pose.shape[-1]) # B*T, 144

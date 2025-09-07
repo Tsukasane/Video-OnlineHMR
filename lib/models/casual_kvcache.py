@@ -358,7 +358,8 @@ class SMPLDecoderModel(nn.Module):
         BN, T, _ = img_feats_all.shape
         if q_tokens is None:
             q_tokens = self.learned_query[:, :T, :].expand(BN, T, -1) # patch level query
-        
+        else:
+            q_tokens = self.input_proj(q_tokens)
         img_feats_all = self.input_proj(img_feats_all) # BN, T, 512
 
         # the stack of transformer lys
@@ -422,7 +423,8 @@ class SMPLDecoderModel(nn.Module):
             if t >= self.max_cache:
                 t = self.max_cache - 1 # NOTE(yiwen) relative position in cache
             q_tokens = self.learned_query[:, t:t+1, :].expand(BN, 1, -1)   # [B,1,D]
-
+        else:
+            q_tokens = self.input_proj(q_tokens)
         img_feat_t = self.input_proj(img_feat_t)
 
         cache_layers = cache['layers'] if (cache is not None and 'layers' in cache) else None
@@ -457,7 +459,9 @@ if __name__=="__main__":
 
     if train:
         print(f"input shape: {x.shape}")  # [B, T, N_patch, D] = [2, 4*192, 1280]
-        smpl_pose, smpl_shape, smpl_cam = decoder(img_feats_all=x, q_tokens=None)
+        
+        q_token2 = einops.rearrange(x, 'b t (h w) c -> (b h w) t c', b=B, h=16, w=12)
+        smpl_pose, smpl_shape, smpl_cam = decoder(img_feats_all=x, q_tokens=q_token2) # NOTE(yiwen) q_tokens=None
     else:
         cache = None
         dummy_inferenceinput = x[:, 0:1, :, :]
@@ -465,7 +469,12 @@ if __name__=="__main__":
         inference_seqlen = 200
 
         for t in range(inference_seqlen): # NOTE(yiwen) test here again
-            smpl_pose, smpl_shape, smpl_cam, cache = decoder.inference_step(img_feat_t=dummy_inferenceinput, t=t, device=device, cache=cache)
+            q_token2 = einops.rearrange(dummy_inferenceinput, 'b t (h w) c -> (b h w) t c', b=B, h=16, w=12)
+            smpl_pose, smpl_shape, smpl_cam, cache = decoder.inference_step(img_feat_t=dummy_inferenceinput, 
+                                                                            q_tokens=q_token2,
+                                                                            t=t, 
+                                                                            device=device, 
+                                                                            cache=cache)
 
     print("smpl pose shape:", smpl_pose.shape)    # B, T, 144
     print("smpl shape shape:", smpl_shape.shape)    #, B, T, 10
