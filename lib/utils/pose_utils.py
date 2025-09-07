@@ -149,6 +149,23 @@ def reconstruction_error(S1, S2) -> np.array:
     re = torch.sqrt( ((S1_hat - S2)** 2).sum(dim=-1)).mean(dim=-1)
     return re.cpu().numpy()
 
+
+def eval_jitter(joints, fps=30):
+    """compute jitter of the motion (how quickly the accel changes)
+    Args:
+        joints (N, J, 3).
+        fps (float).
+    Returns:
+        jitter (N-3).
+    """
+    pred_jitter = torch.norm(
+        (joints[3:] - 3 * joints[2:-1] + 3 * joints[1:-2] - joints[:-3]) * (fps**3),
+        dim=2,
+    ).mean(dim=-1)
+
+    return pred_jitter.cpu().numpy() / 10.0
+
+
 def eval_pose(pred_joints, gt_joints) -> Tuple[np.array, np.array]:
     """
     Compute joint errors in mm before and after Procrustes alignment.
@@ -183,6 +200,8 @@ class Evaluator:
         self.re = np.zeros((dataset_length,))
         self.pve = np.zeros((dataset_length,))
         self.acc = np.zeros((dataset_length,))
+        self.jitter = np.zeros((dataset_length,))
+        self.jitter_gt = np.zeros((dataset_length,))
         self.counter = 0
 
         self.J24_TO_J17 = constants.J24_TO_J17
@@ -261,6 +280,11 @@ class Evaluator:
         self.mpjpe[self.counter:self.counter+batch_size] = mpjpe # bs*seqlen
         self.re[self.counter:self.counter+batch_size] = re
 
+        # third derivatives
+        jitter = eval_jitter(pred_valid)
+        jitter_gt = eval_jitter(gt_valid)
+        self.jitter[self.counter:self.counter+batch_size-3] = jitter
+        self.jitter_gt[self.counter:self.counter+batch_size-3] = jitter_gt
 
         if gt_verts is not None and pred_verts is not None:
             pve = (pred_verts - gt_verts).norm(dim=-1).mean(dim=-1).cpu().numpy()

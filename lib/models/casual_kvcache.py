@@ -238,6 +238,7 @@ class TransformerStack(nn.Module):
     def forward(self, q_tokens, img_feats):
         T = q_tokens.shape[1]
         causal_mask = torch.tril(torch.ones(T, T, device=q_tokens.device)).bool() # NOTE(yiwen) the same causal mask for both self and cross attention
+        # causal_mask = torch.ones(T, T, device=q_tokens.device).bool() # if not using causal mask in training
         for layer in self.layers:
             q_tokens = layer(q_tokens, img_feats, causal_mask)
         return q_tokens
@@ -289,7 +290,7 @@ class SMPLTransformerDecoderHead(nn.Module): # use the context from one image
         nn.init.xavier_uniform_(self.decshape.weight, gain=0.01)
         nn.init.xavier_uniform_(self.deccam.weight, gain=0.01)
 
-        mean_params = np.load('data/smpl/smpl_mean_params.npz')
+        mean_params = np.load('/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/data/smpl/smpl_mean_params.npz')
         init_body_pose = torch.from_numpy(mean_params['pose'].astype(np.float32)).unsqueeze(0)
         init_betas = torch.from_numpy(mean_params['shape'].astype('float32')).unsqueeze(0)
         init_cam = torch.from_numpy(mean_params['cam'].astype(np.float32)).unsqueeze(0)
@@ -439,7 +440,11 @@ class SMPLDecoderModel(nn.Module):
 
 if __name__=="__main__":
 
-    train = True
+    """
+    try directly reshape h*w to T?
+    """
+
+    train = False
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # decoder = KVCacheDecoder(intermediate_feat_dim=384, hidden_dim=512).to(device)

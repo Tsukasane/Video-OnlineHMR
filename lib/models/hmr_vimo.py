@@ -37,7 +37,7 @@ class HMR_VIMO(nn.Module):
         # Backbone
         self.backbone = vit_huge()
 
-        self.smpl_decoder = SMPLDecoderModel(input_dim=1283, hidden_dim=512, max_frames=1000, device=device, max_cache=2)
+        self.smpl_decoder = SMPLDecoderModel(input_dim=1280, hidden_dim=512, max_frames=1000, device=device, max_cache=2)
 
         self.register_buffer('initialized', torch.tensor(False))
         self.inference_memory = None
@@ -86,7 +86,7 @@ class HMR_VIMO(nn.Module):
 
         # frame level
         bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12) 
-        feature = torch.cat([feature, bb], dim=1) # B*3=48, 1283, 16, 12 NOTE(yiwen) image + human bbox --> if we don't use this bbox info
+        # feature = torch.cat([feature, bb], dim=1) # B*3=48, 1283, 16, 12 NOTE(yiwen) image + human bbox --> if we don't use this bbox info
 
         # patch level -->
         feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only, use input in this shape to add spatial and temporal emcoding
@@ -175,7 +175,7 @@ class HMR_VIMO(nn.Module):
 
         # frame level
         bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12) 
-        feature = torch.cat([feature, bb], dim=1) # B*3=48, 1283, 16, 12 NOTE(yiwen) image + human bbox --> if we don't use this bbox info
+        # feature = torch.cat([feature, bb], dim=1) # B*3=48, 1283, 16, 12 NOTE(yiwen) image + human bbox --> if we don't use this bbox info
 
         # patch level -->
         feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only

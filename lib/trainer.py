@@ -179,14 +179,20 @@ class Trainer(BaseTrainer):
         re = evaluator.re[:evaluator.counter].mean()
         mpjpe = evaluator.mpjpe[:evaluator.counter].mean()
         acc = evaluator.acc[:evaluator.counter].mean()
+        jitter = evaluator.jitter[:evaluator.counter].sum() / (evaluator.counter - evaluator.counter/gt_keypoints_3d.shape[0] * 3) # TODO(yiwen) 这里需要去掉多余的n*三个0
+        jitter_gt = evaluator.jitter_gt[:evaluator.counter].sum() / (evaluator.counter - evaluator.counter/gt_keypoints_3d.shape[0] * 3) # TODO(yiwen) 这里需要去掉多余的n*三个0
+
 
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation re: {re}")
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation mpjpe: {mpjpe}")
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation accel: {acc}")
+        logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation jitter: {jitter}")
+        logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation jitter: {jitter_gt}")
 
         self.writer.add_scalar(f"Validation/RE", re, self.global_step)
         self.writer.add_scalar(f"Validation/MPJPE", mpjpe, self.global_step)
         self.writer.add_scalar(f"Validation/ACCEL", acc, self.global_step)
+        self.writer.add_scalar(f"Validation/JITTER", jitter, self.global_step)
         self.writer.flush()
 
         self.model.train()
@@ -194,7 +200,9 @@ class Trainer(BaseTrainer):
 
         self.performance_type = 'min'
 
-        torch.cuda.empty_cache() 
+        torch.cuda.empty_cache()
+
+        breakpoint()
 
         return re
 
