@@ -92,7 +92,8 @@ class HMR_VIMO(nn.Module):
         feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only, use input in this shape to add spatial and temporal emcoding
     
         # NOTE(yiwen) casual transformer
-        pred_pose, pred_shape, pred_cam = self.smpl_decoder(img_feats_all=feature)
+        q_token2 = einops.rearrange(feature, 'b t (h w) c -> b (t h w) c', b=batch_size, h=16, w=12)
+        pred_pose, pred_shape, pred_cam = self.smpl_decoder(img_feats_all=feature, q_tokens=q_token2)
         pred_pose = pred_pose.reshape(-1, pred_pose.shape[-1]) # B*T, 144
         pred_shape = pred_shape.reshape(-1, pred_shape.shape[-1]) # B*T, 10
         pred_cam = pred_cam.reshape(-1, pred_cam.shape[-1])
@@ -187,7 +188,7 @@ class HMR_VIMO(nn.Module):
             pred_pose, pred_shape, pred_cam = [], [], []
             for t in range(inference_seqlen):
                 dummy_inferenceinput = feature[:, t:t+1, :, :]
-                q_token2 = einops.rearrange(dummy_inferenceinput, 'b t (h w) c -> (b h w) t c', b=batch_size, h=16, w=12)
+                q_token2 = einops.rearrange(dummy_inferenceinput, 'b t (h w) c -> b (t h w) c', b=batch_size, h=16, w=12)
                 smpl_pose, smpl_shape, smpl_cam, cache = self.smpl_decoder.inference_step(img_feat_t=dummy_inferenceinput, 
                                                                                           q_tokens=q_token2, 
                                                                                           t=t, 
@@ -200,9 +201,9 @@ class HMR_VIMO(nn.Module):
             pred_shape = torch.cat(pred_shape, dim=0)
             pred_cam = torch.cat(pred_cam, dim=0)
             
-        else:
+        else: # TODO(yiwen) check whether need to pass here through inference
             # NOTE(yiwen) casual transformer
-            q_token2 = einops.rearrange(feature, 'b t (h w) c -> (b h w) t c', b=batch_size, h=16, w=12)
+            q_token2 = einops.rearrange(feature, 'b t (h w) c -> b (t h w) c', b=batch_size, h=16, w=12)
             pred_pose, pred_shape, pred_cam = self.smpl_decoder(img_feats_all=feature, q_tokens=q_token2)
 
 

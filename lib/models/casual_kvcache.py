@@ -161,16 +161,16 @@ class TransformerBlock(nn.Module):
         }
         返回: x_t_next, layer_cache
         """
-        B = x_t.size(0)
+        B = x_t.shape[0]
+        T = x_t.shape[1]
 
-        # ---- 计算当前步的 K/V 并拼到缓存（Self）----
         k_self_t = self.k_proj_self(x_t)   # [B,1,D]
         v_self_t = self.v_proj_self(x_t)
 
         if 'self_k' in layer_cache: # NOTE(yiwen) max_cache=2, only previous and current
-            if self.max_cache == layer_cache['self_k'].shape[1]: # FIFO
-                layer_cache['self_k'] = layer_cache['self_k'][:,1:,:]
-                layer_cache['self_v'] = layer_cache['self_v'][:,1:,:]
+            if self.max_cache - layer_cache['self_k'].shape[1] <= T: # FIFO
+                layer_cache['self_k'] = layer_cache['self_k'][:,T:,:]
+                layer_cache['self_v'] = layer_cache['self_v'][:,T:,:]
             layer_cache['self_k'] = torch.cat([layer_cache['self_k'], k_self_t], dim=1)
             layer_cache['self_v'] = torch.cat([layer_cache['self_v'], v_self_t], dim=1)
         else:
@@ -178,8 +178,8 @@ class TransformerBlock(nn.Module):
             layer_cache['self_v'] = v_self_t
 
         # ---- Self-Attn：q来自当前步，k/v来自缓存 ----
-        q_self_t = self.q_proj(x_t)   # [B,1,D]
-        q_ = q_self_t.view(B, 1, self.num_heads, self.head_dim).transpose(1, 2)  # [B,h,1,d]
+        q_self_t = self.q_proj(x_t)   # [B,T,D]
+        q_ = q_self_t.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)  # [B,h,T(thw),d]
 
         k_cached = layer_cache['self_k'].view(B, -1, self.num_heads, self.head_dim).transpose(1, 2) # [B,h,T,d]
         v_cached = layer_cache['self_v'].view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
@@ -187,18 +187,17 @@ class TransformerBlock(nn.Module):
         attn_scores = torch.matmul(q_, k_cached.transpose(-2, -1)) / (self.head_dim ** 0.5)  # [B,h,1,T]
         attn_w = F.softmax(attn_scores, dim=-1)
         attn_out = torch.matmul(attn_w, v_cached)                                            # [B,h,1,d]
-        attn_out = attn_out.transpose(1, 2).reshape(B, 1, self.hidden_dim)
-
-        x_t = self.ln1(x_t + attn_out)  # 残差 + LN（推理时可省dropout）[B,1,D]
+        attn_out = attn_out.transpose(1, 2).reshape(B, T, self.hidden_dim)
+        x_t = self.ln1(x_t + attn_out)  # residual + LN（no dropout in inference）[B,T,D]
 
         # ---- Cross K/V（来自当前帧 memory），也要缓存 ----
-        k_mem_t = self.k_proj_cross(mem_t)  # [B,1,D]
+        k_mem_t = self.k_proj_cross(mem_t)  # [B,T,D]
         v_mem_t = self.v_proj_cross(mem_t)
 
         if 'mem_k' in layer_cache:
-            if self.max_cache == layer_cache['mem_k'].shape[1]: # FIFO
-                layer_cache['mem_k'] = layer_cache['mem_k'][:,1:,:]
-                layer_cache['mem_v'] = layer_cache['mem_v'][:,1:,:]
+            if self.max_cache - layer_cache['self_k'].shape[1] <= T: # FIFO
+                layer_cache['mem_k'] = layer_cache['mem_k'][:,T:,:]
+                layer_cache['mem_v'] = layer_cache['mem_v'][:,T:,:]
             layer_cache['mem_k'] = torch.cat([layer_cache['mem_k'], k_mem_t], dim=1)
             layer_cache['mem_v'] = torch.cat([layer_cache['mem_v'], v_mem_t], dim=1)
         else:
@@ -208,16 +207,16 @@ class TransformerBlock(nn.Module):
 
         # ---- Cross-Attn：q来自x_t，k/v来自 mem 缓存 ----
         q_cross_t = self.q_proj(x_t)
-        q_ = q_cross_t.view(B, 1, self.num_heads, self.head_dim).transpose(1, 2)
+        q_ = q_cross_t.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         k_mem = layer_cache['mem_k'].view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
         v_mem = layer_cache['mem_v'].view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
 
         cross_scores = torch.matmul(q_, k_mem.transpose(-2, -1)) / (self.head_dim ** 0.5)
         cross_w = F.softmax(cross_scores, dim=-1)
         cross_out = torch.matmul(cross_w, v_mem)
-        cross_out = cross_out.transpose(1, 2).reshape(B, 1, self.hidden_dim)
+        cross_out = cross_out.transpose(1, 2).reshape(B, T, self.hidden_dim)
 
-        x_t = self.ln2(x_t + cross_out)
+        x_t = self.ln2(x_t + cross_out) # 2, 192, 512
 
         # ---- FFN ----
         ffn_out = self.ffn(x_t)
@@ -237,8 +236,8 @@ class TransformerStack(nn.Module):
 
     def forward(self, q_tokens, img_feats):
         T = q_tokens.shape[1]
-        causal_mask = torch.tril(torch.ones(T, T, device=q_tokens.device)).bool() # NOTE(yiwen) the same causal mask for both self and cross attention
-        # causal_mask = torch.ones(T, T, device=q_tokens.device).bool() # if not using causal mask in training
+        # causal_mask = torch.tril(torch.ones(T, T, device=q_tokens.device)).bool() # NOTE(yiwen) should be block wise
+        causal_mask = torch.ones(T, T, device=q_tokens.device).bool() # if not using causal mask in training
         for layer in self.layers:
             q_tokens = layer(q_tokens, img_feats, causal_mask)
         return q_tokens
@@ -352,20 +351,20 @@ class SMPLDecoderModel(nn.Module):
         img_feats_all = self.add_pos_to_seqtokens(img_feats_all, self.device) # NOTE(yiwen) check this
         batch_size = img_feats_all.shape[0]
 
-        img_feats_all = einops.rearrange(img_feats_all, 'b t (h w) c -> (b h w) t c', b=batch_size, h=16, w=12) # b*h*w, 
+        img_feats_all = einops.rearrange(img_feats_all, 'b t (h w) c -> b (t h w) c', b=batch_size, h=16, w=12) # b*h*w, 
         # img_feats_all = self.pooler(img_feats_all)  # NOTE(yiwen) compress frame info to representative patch 某一帧的压缩版重要信息在过往帧中的响应(temporal)
         
-        BN, T, _ = img_feats_all.shape
+        B, T, _ = img_feats_all.shape
         if q_tokens is None:
-            q_tokens = self.learned_query[:, :T, :].expand(BN, T, -1) # patch level query
+            q_tokens = self.learned_query[:, :T, :].expand(B, T, -1) # patch level query
         else:
             q_tokens = self.input_proj(q_tokens)
-        img_feats_all = self.input_proj(img_feats_all) # BN, T, 512
+        img_feats_all = self.input_proj(img_feats_all) # B, T, 512
 
         # the stack of transformer lys
-        out = self.stack(q_tokens, img_feats_all) # BN, T, 512
+        out = self.stack(q_tokens, img_feats_all) # B, T, 512
         # get the image level feature
-        out = einops.rearrange(out, '(b h w) t c -> (b t) c h w', b=batch_size, h=16, w=12) 
+        out = einops.rearrange(out, 'b (t h w) c -> (b t) c h w', b=batch_size, h=16, w=12) 
         pose, shape, cam = self.smpl_head(out)
 
 
@@ -415,26 +414,17 @@ class SMPLDecoderModel(nn.Module):
         img_feat_t = self.add_pos_to_seqtokens(img_feat_t, device, t)  # [B,1,Np,D]
         batch_size = img_feat_t.shape[0]
         # img_feat_t = self.pooler(img_feat_t)                        # [B,1,D]
-        img_feat_t = einops.rearrange(img_feat_t, 'b t (h w) c -> (b h w) t c', b=batch_size, h=16, w=12) 
-        BN = img_feat_t.size(0) # we have a q for each patch this time
+        img_feat_t = einops.rearrange(img_feat_t, 'b t (h w) c -> b (t h w) c', b=batch_size, h=16, w=12) 
+        B = img_feat_t.size(0) # we have a q for each patch this time
 
-        if q_tokens is None:
-            assert t is not None, "inference_step requires t or explicit q_tokens"
-            if t >= self.max_cache:
-                t = self.max_cache - 1 # NOTE(yiwen) relative position in cache
-            q_tokens = self.learned_query[:, t:t+1, :].expand(BN, 1, -1)   # [B,1,D]
-        else:
-            q_tokens = self.input_proj(q_tokens)
-        img_feat_t = self.input_proj(img_feat_t)
-
+        q_tokens = self.input_proj(q_tokens) # 2, 192, 512
+        img_feat_t = self.input_proj(img_feat_t) # 2, 192, 512
         cache_layers = cache['layers'] if (cache is not None and 'layers' in cache) else None
         out, new_cache_layers = self.stack.incremental_step(q_tokens, img_feat_t, cache_layers)
-
-        out = einops.rearrange(out, '(b h w) t c -> (b t) c h w', b=batch_size, h=16, w=12)
+        out = einops.rearrange(out, 'b (t h w) c -> (b t) c h w', b=batch_size, h=16, w=12)
 
         pose, shape, cam = self.smpl_head(out)
 
-        
         new_cache = {'layers': new_cache_layers}
         return pose, shape, cam, new_cache
 
@@ -446,30 +436,30 @@ if __name__=="__main__":
     try directly reshape h*w to T?
     """
 
-    train = False
+    train = True
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # decoder = KVCacheDecoder(intermediate_feat_dim=384, hidden_dim=512).to(device)
     decoder = SMPLDecoderModel(hidden_dim=512).to(device)
 
     # NOTE(yiwen) init dummy input  batch=2, seq_len=4, 1280 feats channels, 64x48 resolution
-    B, T, D, H, W = 2, 250, 1280, 16, 12 # if not using bbox 3 dim here.
+    B, T, D, H, W = 24, 16, 1280, 16, 12 # if not using bbox 3 dim here.
     N_patch = H*W
     x = torch.randn(B, T, N_patch, D).to(device)
 
     if train:
         print(f"input shape: {x.shape}")  # [B, T, N_patch, D] = [2, 4*192, 1280]
         
-        q_token2 = einops.rearrange(x, 'b t (h w) c -> (b h w) t c', b=B, h=16, w=12)
+        q_token2 = einops.rearrange(x, 'b t (h w) c -> b (t h w) c', b=B, h=16, w=12)
         smpl_pose, smpl_shape, smpl_cam = decoder(img_feats_all=x, q_tokens=q_token2) # NOTE(yiwen) q_tokens=None
     else:
         cache = None
         dummy_inferenceinput = x[:, 0:1, :, :]
-        print(f"input shape: {dummy_inferenceinput.shape}")  # [B, T, N_patch, D] = [2, 4*192, 1280]
+        print(f"input shape: {dummy_inferenceinput.shape}")  # [B, T, N_patch, D] = 2, 1, 192, 1280
         inference_seqlen = 200
 
         for t in range(inference_seqlen): # NOTE(yiwen) test here again
-            q_token2 = einops.rearrange(dummy_inferenceinput, 'b t (h w) c -> (b h w) t c', b=B, h=16, w=12)
+            q_token2 = einops.rearrange(dummy_inferenceinput, 'b t (h w) c -> b (t h w) c', b=B, h=16, w=12)
             smpl_pose, smpl_shape, smpl_cam, cache = decoder.inference_step(img_feat_t=dummy_inferenceinput, 
                                                                             q_tokens=q_token2,
                                                                             t=t, 
