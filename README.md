@@ -1,11 +1,5 @@
 # Video-Based Online Human Mesh Recovery
-bbox加上 -- till now cat the bbox to the run didn't really improve the performance
-train的时候不加mask
-H*W*T
-h保留, w变1；然后w保留, h变1 -- 两个branches
-temporal encoding 的时候 inference 用0或者1 的区别不大
-确认一下tram st_module 的地方 h*w reshape到batch上，这样相当于查询每个patch自己的时序相关；然后再 b和t放在一起，换到image层面上decode 当前帧的smpl --> 这种情况下结果会比把 h*w（或downsample之后的h*w）放在channel维度更好
---> 但这种情况下变更 max_cache, cache更长似乎只是造成了“延迟”的效果，像是当前帧的motion融合进了过往帧的信息，但不是“基于过往帧准确推断当前帧”，而是“使当前帧的估计和过往帧有些类似”（在极端动作上会好一些）--> 为什么tram的窗口（双向可看）相对没有延迟的问题？也许因为过往帧和未来帧都会影响到当前帧的估计，所以前向的延迟和后向的延迟都对当前的情况产生了影响。
+
 --> 我们能否考虑添加一个action_rate 之类的，限制下一个time step的action不能过多的偏离当前帧的估计，因为默认sequential前后帧的人不能有过大的变化（不能瞬移）
 --> check visualization的脚本，应该还是一个一个人估计，然后画在一起。
 smpl decoder在init pose基础上去做 /ocean/projects/cis240055p/yzhao16/tram/lib/models/modules.py

@@ -181,7 +181,7 @@ class HMR_VIMO(nn.Module):
         # patch level -->
         feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only
         
-        if not is_train and not is_valid: # in inference
+        if not is_train: # in inference
             cache = None
             inference_seqlen = feature.shape[1]
 

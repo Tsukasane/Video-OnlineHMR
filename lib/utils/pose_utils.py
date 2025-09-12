@@ -150,19 +150,26 @@ def reconstruction_error(S1, S2) -> np.array:
     return re.cpu().numpy()
 
 
-def eval_jitter(joints, fps=30):
+def eval_jitter(batch_joints, fps=30):
     """compute jitter of the motion (how quickly the accel changes)
     Args:
-        joints (N, J, 3).
+        joints (B, T, J, 3).
         fps (float).
     Returns:
-        jitter (N-3).
+        jitter (T-3).
     """
-    pred_jitter = torch.norm(
-        (joints[3:] - 3 * joints[2:-1] + 3 * joints[1:-2] - joints[:-3]) * (fps**3),
-        dim=2,
-    ).mean(dim=-1)
+    B, T, J, _ = batch_joints.shape
+    all_jitter = []
+    for b in range(batch_joints.shape[0]):
+        joints = batch_joints[b] # T, J, 3
+        pred_jitter1 = torch.norm(
+            (joints[3:] - 3 * joints[2:-1] + 3 * joints[1:-2] - joints[:-3]) * (fps**3),
+            dim=2,
+        ).mean(dim=-1) # across all directions
+        all_jitter.append(pred_jitter1)
 
+    # average across all elements in a batch
+    pred_jitter = torch.stack(all_jitter).reshape(-1)
     return pred_jitter.cpu().numpy() / 10.0
 
 
@@ -280,12 +287,6 @@ class Evaluator:
         self.mpjpe[self.counter:self.counter+batch_size] = mpjpe # bs*seqlen
         self.re[self.counter:self.counter+batch_size] = re
 
-        # third derivatives
-        jitter = eval_jitter(pred_valid)
-        jitter_gt = eval_jitter(gt_valid)
-        self.jitter[self.counter:self.counter+batch_size-3] = jitter
-        self.jitter_gt[self.counter:self.counter+batch_size-3] = jitter_gt
-
         if gt_verts is not None and pred_verts is not None:
             pve = (pred_verts - gt_verts).norm(dim=-1).mean(dim=-1).cpu().numpy()
             self.pve[self.counter:self.counter+batch_size] = pve * 1000
@@ -300,6 +301,12 @@ class Evaluator:
             
             self.acc[self.counter:self.counter+batch_size] = acc * 1000 #(30**2)
             # print(f"current acc {acc}")
+            # third derivatives
+            jitter = eval_jitter(pred)
+            jitter_gt = eval_jitter(gt)
+            self.jitter[self.counter:self.counter+batch_size-3*pred.shape[0]] = jitter
+            self.jitter_gt[self.counter:self.counter+batch_size-3*pred.shape[0]] = jitter_gt
+            
         self.counter += batch_size
 
 

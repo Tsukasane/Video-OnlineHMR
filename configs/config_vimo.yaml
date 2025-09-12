@@ -8,11 +8,11 @@ IMG_RES: 256
 DATASET:
   # LIST: ['3dpw_vid', 'h36m_vid'] # NOTE(yiwen) temp debugging
   # PARTITION: [0.5, 0.5]
-  # LIST: ['3dpw_vid']
-  # PARTITION: [1.0]
+  LIST: ['3dpw_vid']
+  PARTITION: [1.0]
   # TODO(yiwen) clean the config
-  LIST: ['3dpw_vid', 'h36m_vid', 'bedlam_vid']
-  PARTITION: [0.165, 0.165, 0.67]
+  # LIST: ['3dpw_vid', 'h36m_vid', 'bedlam_vid']
+  # PARTITION: [0.165, 0.165, 0.67]
   SEQ_LEN: 16
   TEST: 'emdb_1' #'emdb_1' or '3dpw_vid_test'
 
@@ -60,7 +60,7 @@ MODEL:
   VALID_RANGE: (0,2)
 
 
-EXP_NAME: 'online_videohmrv2_wmask' # onlineTRAM_sequence
+EXP_NAME: 'online_videohmrv2_wmask_tryTHWlr3e-5' # onlineTRAM_sequence
 COMMENT:
   'Default configs.'
 

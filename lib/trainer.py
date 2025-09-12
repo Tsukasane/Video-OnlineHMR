@@ -179,8 +179,8 @@ class Trainer(BaseTrainer):
         re = evaluator.re[:evaluator.counter].mean()
         mpjpe = evaluator.mpjpe[:evaluator.counter].mean()
         acc = evaluator.acc[:evaluator.counter].mean()
-        jitter = evaluator.jitter[:evaluator.counter].sum() / (evaluator.counter - evaluator.counter/gt_keypoints_3d.shape[0] * 3) # TODO(yiwen) 这里需要去掉多余的n*三个0
-        jitter_gt = evaluator.jitter_gt[:evaluator.counter].sum() / (evaluator.counter - evaluator.counter/gt_keypoints_3d.shape[0] * 3) # TODO(yiwen) 这里需要去掉多余的n*三个0
+        jitter = evaluator.jitter[:evaluator.counter].sum() / (evaluator.counter - evaluator.counter/gt_keypoints_3d.shape[0] * 24) # TODO(yiwen) 这里需要去掉多余的n*三个0
+        jitter_gt = evaluator.jitter_gt[:evaluator.counter].sum() / (evaluator.counter - evaluator.counter/gt_keypoints_3d.shape[0] * 24) # TODO(yiwen) 这里需要去掉多余的n*三个0
 
 
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation re: {re}")
