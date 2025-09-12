@@ -18,6 +18,11 @@ from lib.models.casual_kvcache import SMPLDecoderModel
 
 autocast = torch.amp.autocast
 
+def select_valid(batch_tensor, batch_size):
+    batch_tensor = batch_tensor.reshape(batch_size, -1, *batch_tensor.shape[1:])[:,2:,...]
+    batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
+
+    return batch_tensor
 
 class HMR_VIMO(nn.Module):
     def __init__(self, cfg=None, device='cuda', **kwargs):
@@ -28,7 +33,7 @@ class HMR_VIMO(nn.Module):
         self.crop_size = cfg.IMG_RES
         self.seq_len = cfg.DATASET.SEQ_LEN
         self.chunk_size = 16
-        self.train_bs = cfg.TRAIN.SEQUENCE_BS
+        self.train_bs = cfg.TRAIN.BATCH_SIZE
         self.valid_bs = cfg.TEST.BATCH_SIZE
 
         # SMPL
@@ -37,7 +42,14 @@ class HMR_VIMO(nn.Module):
         # Backbone
         self.backbone = vit_huge()
 
-        self.smpl_decoder = SMPLDecoderModel(input_dim=1280, hidden_dim=512, max_frames=1000, device=device, max_cache=2)
+        # cache config
+        self.max_memt = 2 # frame
+        self.H = 16
+        self.W = 12
+        self.smpl_decoder = SMPLDecoderModel(input_dim=1280, 
+                                             hidden_dim=512, 
+                                             device=device,
+                                             max_cache=self.max_memt * self.H * self.W) # t*h*w
 
         self.register_buffer('initialized', torch.tensor(False))
         self.inference_memory = None
@@ -69,10 +81,9 @@ class HMR_VIMO(nn.Module):
         img_focal = batch['img_focal'] # B*T
         img_center = batch['img_center'] # B*T, 2
 
-        # TODO(yiwen) pass through configs to function
         if is_train:
-            batch_size = 16
-        else:
+            batch_size = self.train_bs
+        else: # TODO(yiwen) del this part, since only pass this part in training
             batch_size = 1
 
         # estimate focal length, and bbox 
@@ -91,9 +102,18 @@ class HMR_VIMO(nn.Module):
         # patch level -->
         feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only, use input in this shape to add spatial and temporal emcoding
     
-        # NOTE(yiwen) casual transformer
-        q_token2 = einops.rearrange(feature, 'b t (h w) c -> b (t h w) c', b=batch_size, h=16, w=12)
-        pred_pose, pred_shape, pred_cam = self.smpl_decoder(img_feats_all=feature, q_tokens=q_token2)
+        #### add new
+        max_cache = self.max_memt * self.H * self.W
+        total_num = feature.shape[1]
+        chunks = feature.unfold(dimension=1, size=self.max_memt+1, step=1)
+        chunks = chunks.reshape(-1,*chunks.shape[2:]).permute(0,3,1,2) # B*N, window_length, h*w, D
+        q_token_raw = chunks[:,2:3,...] # current
+        img_feats_raw = chunks[:,0:2,...] # previous
+
+        new_bs = img_feats_raw.shape[0] # 336(24*(16-2)), 2, 192, 1280
+        q_token2 = einops.rearrange(q_token_raw, 'b t (h w) c -> b (t h w) c', b=new_bs, h=self.H, w=self.W)
+
+        pred_pose, pred_shape, pred_cam = self.smpl_decoder(img_feats_all=img_feats_raw, q_tokens=q_token2)
         pred_pose = pred_pose.reshape(-1, pred_pose.shape[-1]) # B*T, 144
         pred_shape = pred_shape.reshape(-1, pred_shape.shape[-1]) # B*T, 10
         pred_cam = pred_cam.reshape(-1, pred_cam.shape[-1])
@@ -116,6 +136,11 @@ class HMR_VIMO(nn.Module):
         
         s_out = self.smpl.query(out)
         j3d = s_out.joints
+        
+        center = select_valid(center, batch_size)
+        scale = select_valid(scale, batch_size)
+        img_focal = select_valid(img_focal, batch_size)
+        img_center = select_valid(img_center, batch_size)
         j2d = self.project(j3d, out['pred_cam'], center, scale, img_focal, img_center)
 
         rotmat_preds.append(out['pred_rotmat'].clone())
@@ -181,7 +206,7 @@ class HMR_VIMO(nn.Module):
         # patch level -->
         feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only
         
-        if not is_train: # in inference
+        if not is_train: # in inference / validation
             cache = None
             inference_seqlen = feature.shape[1]
 

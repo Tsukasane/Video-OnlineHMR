@@ -12,8 +12,13 @@ def compute_l2_loss(batch):
     loss = F.mse_loss(x2, output, reduction='mean')
     return loss
 
+def select_valid(batch_tensor, batch_size): # max_cache=2
+    batch_tensor = batch_tensor.reshape(batch_size, -1, *batch_tensor.shape[1:])[:,2:,...]
+    batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
 
-def keypoint_loss(batch, valid_range=(0,2), openpose_weight=0., gt_weight=1.):
+    return batch_tensor
+
+def keypoint_loss(batch, valid_range=(0,2), batch_size=24, openpose_weight=0., gt_weight=1.):
     """ Compute 2D reprojection loss on the keypoints.
     The loss is weighted by the confidence.
     The available keypoints are different for each dataset.
@@ -21,6 +26,8 @@ def keypoint_loss(batch, valid_range=(0,2), openpose_weight=0., gt_weight=1.):
 
     pred_keypoints_2d = batch['pred_keypoints_2d'] # 72, 49, 2
     gt_keypoints_2d = batch['keypoints'] # 72, 49, 3
+
+    gt_keypoints_2d = select_valid(gt_keypoints_2d, batch_size)
 
     conf = gt_keypoints_2d[:, :, [-1]].clone()
     conf[:, :25] *= openpose_weight
@@ -32,7 +39,7 @@ def keypoint_loss(batch, valid_range=(0,2), openpose_weight=0., gt_weight=1.):
     return loss
 
 
-def keypoint_3d_loss(batch, valid_range=(0,2)):
+def keypoint_3d_loss(batch, valid_range=(0,2), batch_size=24):
     """Compute 3D keypoint loss for the examples that 3D keypoint annotations are available.
     The loss is weighted by the confidence.
     """
@@ -41,6 +48,9 @@ def keypoint_3d_loss(batch, valid_range=(0,2)):
     gt_keypoints_3d = batch['pose_3d'] # 72, 24, 4
     has_pose_3d = batch['has_pose_3d'] # 72
     device = pred_keypoints_3d.device
+
+    gt_keypoints_3d = select_valid(gt_keypoints_3d, batch_size)
+    has_pose_3d = select_valid(has_pose_3d, batch_size)
 
     pred_keypoints_3d = pred_keypoints_3d[:, 25:, :]
     conf = gt_keypoints_3d[:, :, -1].unsqueeze(-1).clone()
@@ -116,13 +126,16 @@ def smpl_losses(batch, pose_weight=1., beta_weight=0.001):
     loss = pose_weight*loss_regr_pose + beta_weight*loss_regr_betas
     return loss
 
-def smpl_losses_plus(batch, valid_range=(0,2), pose_weight=1., beta_weight=0.001, init_w=1.0):
+def smpl_losses_plus(batch, valid_range=(0,2), batch_size=24, pose_weight=1., beta_weight=0.001, init_w=1.0):
     pred_rotmat_0 = batch['pred_rotmat_0']
     pred_rotmat = batch['pred_rotmat']
     pred_betas  = batch['pred_betas']
-    gt_pose  = batch['pose']
-    gt_betas = batch['betas']
-    has_smpl = batch['has_smpl']
+    # gt_pose  = batch['pose']
+    # gt_betas = batch['betas']
+    # has_smpl = batch['has_smpl']
+    gt_pose  = select_valid(batch['pose'], batch_size)
+    gt_betas = select_valid(batch['betas'], batch_size)
+    has_smpl = select_valid(batch['has_smpl'], batch_size)
     beta_weight = batch['beta_weight']
     device = pred_rotmat.device
 
@@ -145,11 +158,11 @@ def smpl_losses_plus(batch, valid_range=(0,2), pose_weight=1., beta_weight=0.001
     # print(f'debug -- smpl loss plus {loss}')
     return loss
 
-def vertice_loss(batch, valid_range=(0,2)):
+def vertice_loss(batch, valid_range=(0,2), batch_size=24):
 
     pred_rotmat = batch['pred_rotmat'] # 72, 24, 3, 3
     pred_betas  = batch['pred_betas']# 72, 10
-    has_smpl = batch['has_smpl'] # 72
+    has_smpl = select_valid(batch['has_smpl'], batch_size) # 72
 
     smpl = batch['smpl']
     device = pred_rotmat.device
@@ -162,8 +175,8 @@ def vertice_loss(batch, valid_range=(0,2)):
     pred_vert = pred_out.vertices
     # gt vertices
     if 'gt_vert' not in batch:
-        gt_pose  = batch['pose']
-        gt_betas = batch['betas']
+        gt_pose  = select_valid(batch['pose'], batch_size)
+        gt_betas = select_valid(batch['betas'], batch_size)
         gt_rotmat = batch_rodrigues(gt_pose.reshape(-1,3)).reshape(-1, 24, 3, 3)
 
         gt_out = smpl(global_orient=gt_rotmat[:,[0]],
@@ -173,7 +186,7 @@ def vertice_loss(batch, valid_range=(0,2)):
         gt_vert = gt_out.vertices
         batch['gt_vert'] = gt_vert
     else:
-        gt_vert = batch['gt_vert']
+        gt_vert = select_valid(batch['gt_vert'], batch_size)
 
     gt_vert = gt_vert[has_smpl == 1]
     pred_vert = pred_vert[has_smpl == 1]
@@ -182,7 +195,6 @@ def vertice_loss(batch, valid_range=(0,2)):
         loss  = F.l1_loss(pred_vert, gt_vert)
     else:
         loss = torch.FloatTensor(1).fill_(0.).mean().to(device)
-    # print(f'debug -- vertice loss {loss}')
     return loss
 
 
@@ -233,12 +245,12 @@ class BaseLoss(torch.nn.Module):
         self.weights = {}
         self.functions = {}
 
-    def forward(self, batch, valid_range):
+    def forward(self, batch, valid_range, batch_size):
         losses = {}
         mixes_loss = 0
         
         for t, w in self.weights.items():
-            loss = self.functions[t](batch, valid_range)
+            loss = self.functions[t](batch, valid_range, batch_size)
             mixes_loss += w * loss
             losses[t] = loss.item()
 

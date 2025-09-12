@@ -45,6 +45,7 @@ class Trainer(BaseTrainer):
             N = len(rotmat_preds)
             
             gamma = self.cfg.TRAIN.GAMMA
+            train_bs = self.cfg.TRAIN.BATCH_SIZE
             loss = 0
 
             for j in range(N):
@@ -54,7 +55,7 @@ class Trainer(BaseTrainer):
                 batch['pred_keypoints_3d'] = j3d_preds[j] # 72, 49, 3
                 batch['pred_keypoints_2d'] = (j2d_preds[j]-crop_size/2.) / (crop_size/2.) # 72, 49, 2
                 
-                loss_j, losses = self.criterion(batch, self.valid_range)
+                loss_j, losses = self.criterion(batch, self.valid_range, train_bs)
                 loss += gamma**(N-j-1) * loss_j
                 
             loss *= self.cfg.TRAIN.LOSS_SCALE

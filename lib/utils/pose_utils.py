@@ -12,6 +12,8 @@ from lib.core import constants
 from freq_motion import plot_spectrogram, plot_amplitude
 import pickle
 
+
+# TODO(yiwen) ignore the first couple of GT since the pred doesn't have these
 def cal_spectrogram_similarity(gt_amp, pred_amp):
     # 1) MSE
     mse = torch.mean((gt_amp - pred_amp) ** 2)
