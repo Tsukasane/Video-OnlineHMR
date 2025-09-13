@@ -132,7 +132,7 @@ class TransformerBlock(nn.Module):
         Return: x_t (fused self spatial info + previous temporal info), layer_cache
         """
         B = x_t.shape[0]
-        T = x_t.shape[1] # t*h*w
+        T = x_t.shape[1] # h*w
 
         k_self_t = self.k_proj_self(x_t)   # [B,1,D]
         v_self_t = self.v_proj_self(x_t)
@@ -156,12 +156,15 @@ class TransformerBlock(nn.Module):
 
         q_cross_t = self.q_proj_cross(x_t)
         q_ = q_cross_t.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        
         if 'mem_k' in layer_cache:
             k_mem = layer_cache['mem_k'].view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
             v_mem = layer_cache['mem_v'].view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
         else:
             k_mem = k_mem_t.view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
             v_mem = v_mem_t.view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
+
+        print(f"debug -- k_mem.shape {k_mem.shape}")
 
         cross_scores = torch.matmul(q_, k_mem.transpose(-2, -1)) / (self.head_dim ** 0.5)
         cross_w = F.softmax(cross_scores, dim=-1)
@@ -176,7 +179,7 @@ class TransformerBlock(nn.Module):
                 layer_cache['mem_k'] = layer_cache['mem_k'][:,T:,:]
                 layer_cache['mem_v'] = layer_cache['mem_v'][:,T:,:]
             layer_cache['mem_k'] = torch.cat([layer_cache['mem_k'], k_mem_t], dim=1)
-            layer_cache['mem_v'] = torch.cat([layer_cache['mem_v'], v_mem_t], dim=1)
+            layer_cache['mem_v'] = torch.cat([layer_cache['mem_v'], v_mem_t], dim=1) # cat的操作和两帧的reshape是一样的嘛
         else:
             layer_cache['mem_k'] = k_mem_t
             layer_cache['mem_v'] = v_mem_t
@@ -301,7 +304,7 @@ class SMPLDecoderModel(nn.Module):
 
     def forward(self, img_feats_all, q_tokens=None):
 
-        img_feats_all = self.add_pos_to_seqtokens(img_feats_all, self.device) # NOTE(yiwen) check this
+        # img_feats_all = self.add_pos_to_seqtokens(img_feats_all, self.device) # NOTE(yiwen) check this
         batch_size = img_feats_all.shape[0]
 
         img_feats_all = einops.rearrange(img_feats_all, 'b t (h w) c -> b (t h w) c', b=batch_size, h=16, w=12) # b*h*w, 
@@ -312,10 +315,8 @@ class SMPLDecoderModel(nn.Module):
 
         # the stack of transformer lys
         out = self.stack(q_tokens, img_feats_all) # B, T, 512
-        # get the image level feature
         out = einops.rearrange(out, 'b (t h w) c -> (b t) c h w', b=batch_size, h=16, w=12) 
         pose, shape, cam = self.smpl_head(out)
-
 
         return pose, shape, cam
 
@@ -354,12 +355,12 @@ class SMPLDecoderModel(nn.Module):
         img_feat_t: [B, 1, N_patch, D]（single frame）
         cache: {
             'layers': [  # len == num_layers
-                {'self_k':..., 'self_v':..., 'mem_k':..., 'mem_v':...},
+                {'mem_k':..., 'mem_v':...},
                 ...
             ]
         }
         """
-        img_feat_t = self.add_pos_to_seqtokens(img_feat_t, device, t)  # [B,1,Np,D]
+        # img_feat_t = self.add_pos_to_seqtokens(img_feat_t, device, t)  # [B,1,Np,D]
         batch_size = img_feat_t.shape[0]
         img_feat_t = einops.rearrange(img_feat_t, 'b t (h w) c -> b (t h w) c', b=batch_size, h=16, w=12)
         B = img_feat_t.size(0) # we have a q for each patch this time

@@ -12,6 +12,11 @@ from lib.core import constants
 from freq_motion import plot_spectrogram, plot_amplitude
 import pickle
 
+def select_valid(batch_tensor, batch_size):
+    batch_tensor = batch_tensor.reshape(batch_size, -1, *batch_tensor.shape[1:])[:,2:,...]
+    batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
+
+    return batch_tensor
 
 # TODO(yiwen) ignore the first couple of GT since the pred doesn't have these
 def cal_spectrogram_similarity(gt_amp, pred_amp):
@@ -30,11 +35,6 @@ def cal_spectrogram_similarity(gt_amp, pred_amp):
 
     print(f'spectrogram similarity -- MSE:{mse}, LSD:{lsd}, CORR:{corr}')
 
-def select_valid(batch_tensor, valid_range):
-    batch_tensor = batch_tensor.reshape(-1, 3, *batch_tensor.shape[1:])[:,valid_range[0]:valid_range[1]+1]
-    batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
-
-    return batch_tensor
 
 def compute_error_accel(joints_gt, joints_pred, vis=None):
     """
@@ -237,7 +237,7 @@ class Evaluator:
             - gt_verts: bs * 3, 6890, 3
             - pred_verts: bs * 3, 6890, 3
         '''
-        batch_size = gt_keypoints_3d.shape[0] # 128, 24, 4
+        # batch_size = gt_keypoints_3d.shape[0] # 128, 24, 4
 
         gt_keypoints_3d = gt_keypoints_3d[:, :, :3].detach()
         pred_keypoints_3d = pred_keypoints_3d[:, :, :3].detach()
@@ -283,6 +283,14 @@ class Evaluator:
             # cal_spectrogram_similarity(gtnoise_amplitude, pred_amplitude)
             self.visualize_spec = False
         
+
+        # TODO(yiwen) make it to args, only for debug now
+        use_train_pipeline_to_valid = True
+        batch_t = 16
+        if use_train_pipeline_to_valid:
+            gt_valid = select_valid(gt_valid, batch_t)
+
+        batch_size = gt_valid.shape[0]
         # Compute joint errors
         mpjpe, re = eval_pose(pred_valid, gt_valid) # only pass current frame to eval pose
 
@@ -290,10 +298,14 @@ class Evaluator:
         self.re[self.counter:self.counter+batch_size] = re
 
         if gt_verts is not None and pred_verts is not None:
+            if use_train_pipeline_to_valid:
+                gt_verts = select_valid(gt_verts, batch_t)
             pve = (pred_verts - gt_verts).norm(dim=-1).mean(dim=-1).cpu().numpy()
             self.pve[self.counter:self.counter+batch_size] = pve * 1000
 
         if self.seq_len is not None:
+            if use_train_pipeline_to_valid:
+                gt_keypoints_3d = select_valid(gt_keypoints_3d, batch_t)
             gt = gt_keypoints_3d.reshape(-1, self.seq_len, num_j, 3).cpu()
             pred = pred_keypoints_3d.reshape(-1, self.seq_len, num_j, 3).cpu()
             acc = 0 # NOTE(yiwen) originally calculate the acc error in each window

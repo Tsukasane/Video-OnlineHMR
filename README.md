@@ -1,4 +1,5 @@
 # Video-Based Online Human Mesh Recovery
+debug (use training pipeline to infer) -- hmr vimo true, /ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/lib/utils/pose_utils.py true
 
 --> 我们能否考虑添加一个action_rate 之类的，限制下一个time step的action不能过多的偏离当前帧的估计，因为默认sequential前后帧的人不能有过大的变化（不能瞬移）
 --> check visualization的脚本，应该还是一个一个人估计，然后画在一起。

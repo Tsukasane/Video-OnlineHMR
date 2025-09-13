@@ -81,10 +81,7 @@ class HMR_VIMO(nn.Module):
         img_focal = batch['img_focal'] # B*T
         img_center = batch['img_center'] # B*T, 2
 
-        if is_train:
-            batch_size = self.train_bs
-        else: # TODO(yiwen) del this part, since only pass this part in training
-            batch_size = 1
+        batch_size = self.train_bs
 
         # estimate focal length, and bbox 
         bbox_info = self.bbox_est(center, scale, img_focal, img_center) # 128, 3
@@ -205,16 +202,21 @@ class HMR_VIMO(nn.Module):
 
         # patch level -->
         feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only
-        
-        if not is_train: # in inference / validation
+        debug = True # TODO(yiwen) only for debug
+        if not is_train and not debug: # in inference / validation
             cache = None
             inference_seqlen = feature.shape[1]
 
             pred_pose, pred_shape, pred_cam = [], [], []
-            for t in range(inference_seqlen):
-                dummy_inferenceinput = feature[:, t:t+1, :, :]
-                q_token2 = einops.rearrange(dummy_inferenceinput, 'b t (h w) c -> b (t h w) c', b=batch_size, h=16, w=12)
-                smpl_pose, smpl_shape, smpl_cam, cache = self.smpl_decoder.inference_step(img_feat_t=dummy_inferenceinput, 
+            for t in range(inference_seqlen): # TODO(yiwen) why performance gap?
+
+                q_token_raw = feature[:,t:t+1,...] # current, NOTE(yiwen) there is no previous clue for the first max_cache frames
+                new_bs = q_token_raw.shape[0] # 336(24*(16-2)), 2, 192, 1280
+                q_token2 = einops.rearrange(q_token_raw, 'b t (h w) c -> b (t h w) c', b=new_bs, h=self.H, w=self.W)
+                img_feats_raw = feature[:,t:t+1,...] # init
+                # dummy_inferenceinput = feature[:, t:t+1, :, :]
+                # q_token2 = einops.rearrange(dummy_inferenceinput, 'b t (h w) c -> b (t h w) c', b=batch_size, h=16, w=12)
+                smpl_pose, smpl_shape, smpl_cam, cache = self.smpl_decoder.inference_step(img_feat_t=img_feats_raw, 
                                                                                           q_tokens=q_token2, 
                                                                                           t=t, 
                                                                                           device=device, 
@@ -226,11 +228,21 @@ class HMR_VIMO(nn.Module):
             pred_shape = torch.cat(pred_shape, dim=0)
             pred_cam = torch.cat(pred_cam, dim=0)
             
-        else: # TODO(yiwen) check whether need to pass here through inference
-            # NOTE(yiwen) casual transformer
-            q_token2 = einops.rearrange(feature, 'b t (h w) c -> b (t h w) c', b=batch_size, h=16, w=12)
-            pred_pose, pred_shape, pred_cam = self.smpl_decoder(img_feats_all=feature, q_tokens=q_token2)
+        else:
 
+            #### add new
+            print(f"debug -- valid using train pipeline")
+            max_cache = self.max_memt * self.H * self.W
+            total_num = feature.shape[1]
+            chunks = feature.unfold(dimension=1, size=self.max_memt+1, step=1)
+            chunks = chunks.reshape(-1,*chunks.shape[2:]).permute(0,3,1,2) # B*N, window_length, h*w, D
+            q_token_raw = chunks[:,2:3,...] # current
+            img_feats_raw = chunks[:,0:2,...] # previous
+
+            new_bs = img_feats_raw.shape[0] # 336(24*(16-2)), 2, 192, 1280
+            q_token2 = einops.rearrange(q_token_raw, 'b t (h w) c -> b (t h w) c', b=new_bs, h=self.H, w=self.W)
+            # 16*(8-2)
+            pred_pose, pred_shape, pred_cam = self.smpl_decoder(img_feats_all=img_feats_raw, q_tokens=q_token2)
 
         pred_pose = pred_pose.reshape(-1, pred_pose.shape[-1]) # B*T, 144
         pred_shape = pred_shape.reshape(-1, pred_shape.shape[-1]) # B*T, 10
@@ -252,10 +264,16 @@ class HMR_VIMO(nn.Module):
         out['pred_rotmat'] = rot6d_to_rotmat(out['pred_pose']).reshape(-1, 24, 3, 3)
         out['pred_rotmat_0'] = pred_rotmat_0
         
+        if debug:
+            print(f"debug -- in valid")
+            center = select_valid(center, batch_size)
+            scale = select_valid(scale, batch_size)
+            img_focal = select_valid(img_focal, batch_size)
+            img_center = select_valid(img_center, batch_size)
+
         s_out = self.smpl.query(out)
         j3d = s_out.joints
         j2d = self.project(j3d, out['pred_cam'], center, scale, img_focal, img_center)
-
         rotmat_preds.append(out['pred_rotmat'].clone())
         shape_preds.append(out['pred_shape'].clone())
         cam_preds.append(out['pred_cam'].clone())
