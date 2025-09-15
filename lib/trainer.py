@@ -30,6 +30,9 @@ class Trainer(BaseTrainer):
 
             batch = {k: v.to(self.device) for k, v in batch.items()} # continuous
 
+            if batch['img'].shape[0] < self.cfg.TRAIN.BATCH_SIZE * self.cfg.DATASET.SEQ_LEN:
+                continue
+            
             batch['beta_weight'] = self.cfg.TRAIN.SMPL_BETA
             batch['smpl'] = self.model.smpl
 
@@ -143,12 +146,6 @@ class Trainer(BaseTrainer):
             # prediction
             with torch.no_grad():
                 # batch.keys() ['img_idx', 'img_focal', 'img_center', 'img', 'pose', 'betas', 'pose_3d', 'gt_verts', 'keypoints', 'scale', 'center', 'has_smpl', 'has_pose_3d']
-                
-                # NOTE(yiwen) set is_train=True in training and validation
-                # NOTE(yiwen) Option1: still use the same workflow for train and validation
-                # out, _ = model(batch, self.valid_range, is_train=False, is_valid=True, iters=update_iter) # 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
-                # out.keys() ['pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full']
-                # [B, 3] [B, 144] [B, 10] [B, 24, 3, 3] [B, 24, 3, 3] [B, 1, 3]
 
                 # NOTE(yiwen) Option2: use the test/inference workflow
                 out, _ = model.inference_forward(batch, is_valid=True) # default is inference mode
@@ -180,8 +177,8 @@ class Trainer(BaseTrainer):
         re = evaluator.re[:evaluator.counter].mean()
         mpjpe = evaluator.mpjpe[:evaluator.counter].mean()
         acc = evaluator.acc[:evaluator.counter].mean()
-        jitter = evaluator.jitter[:evaluator.counter].sum() / (evaluator.counter - evaluator.counter/gt_keypoints_3d.shape[0] * 24) # TODO(yiwen) 这里需要去掉多余的n*三个0
-        jitter_gt = evaluator.jitter_gt[:evaluator.counter].sum() / (evaluator.counter - evaluator.counter/gt_keypoints_3d.shape[0] * 24) # TODO(yiwen) 这里需要去掉多余的n*三个0
+        jitter = evaluator.jitter[:evaluator.counter].mean()
+        jitter_gt = evaluator.jitter_gt[:evaluator.counter].mean()
 
 
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation re: {re}")

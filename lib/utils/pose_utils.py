@@ -18,7 +18,7 @@ def select_valid(batch_tensor, batch_size):
 
     return batch_tensor
 
-# TODO(yiwen) ignore the first couple of GT since the pred doesn't have these
+# NOTE(yiwen) ignore the first couple of GT since the pred doesn't have these
 def cal_spectrogram_similarity(gt_amp, pred_amp):
     # 1) MSE
     mse = torch.mean((gt_amp - pred_amp) ** 2)
@@ -152,27 +152,21 @@ def reconstruction_error(S1, S2) -> np.array:
     return re.cpu().numpy()
 
 
-def eval_jitter(batch_joints, fps=30):
-    """compute jitter of the motion (how quickly the accel changes)
+def eval_jitter(joints, fps=30):
+    """compute jitter of the motion
     Args:
-        joints (B, T, J, 3).
+        joints (N, J, 3).
         fps (float).
     Returns:
-        jitter (T-3).
+        jitter (N-3).
     """
-    B, T, J, _ = batch_joints.shape
-    all_jitter = []
-    for b in range(batch_joints.shape[0]):
-        joints = batch_joints[b] # T, J, 3
-        pred_jitter1 = torch.norm(
-            (joints[3:] - 3 * joints[2:-1] + 3 * joints[1:-2] - joints[:-3]) * (fps**3),
-            dim=2,
-        ).mean(dim=-1) # across all directions
-        all_jitter.append(pred_jitter1)
+    pred_jitter = torch.norm(
+        (joints[3:] - 3 * joints[2:-1] + 3 * joints[1:-2] - joints[:-3]) * (fps**3),
+        dim=2,
+    ).mean(dim=-1)
 
-    # average across all elements in a batch
-    pred_jitter = torch.stack(all_jitter).reshape(-1)
     return pred_jitter.cpu().numpy() / 10.0
+
 
 
 def eval_pose(pred_joints, gt_joints) -> Tuple[np.array, np.array]:
@@ -286,7 +280,7 @@ class Evaluator:
 
         # TODO(yiwen) make it to args, only for debug now
         use_train_pipeline_to_valid = True
-        batch_t = 16
+        batch_t = 8
         if use_train_pipeline_to_valid:
             gt_valid = select_valid(gt_valid, batch_t)
 
@@ -306,20 +300,24 @@ class Evaluator:
         if self.seq_len is not None:
             if use_train_pipeline_to_valid:
                 gt_keypoints_3d = select_valid(gt_keypoints_3d, batch_t)
-            gt = gt_keypoints_3d.reshape(-1, self.seq_len, num_j, 3).cpu()
-            pred = pred_keypoints_3d.reshape(-1, self.seq_len, num_j, 3).cpu()
+            # gt = gt_keypoints_3d.reshape(-1, self.seq_len, num_j, 3).cpu()
+            # pred = pred_keypoints_3d.reshape(-1, self.seq_len, num_j, 3).cpu()
+            gt = gt_keypoints_3d.reshape(batch_t, -1, num_j, 3).cpu()
+            pred = pred_keypoints_3d.reshape(batch_t, -1, num_j, 3).cpu()
             acc = 0 # NOTE(yiwen) originally calculate the acc error in each window
 
             for i in range(len(gt)):
                 acc += compute_error_accel(gt[i], pred[i]).mean() / len(gt)
             
             self.acc[self.counter:self.counter+batch_size] = acc * 1000 #(30**2)
-            # print(f"current acc {acc}")
-            # third derivatives
-            jitter = eval_jitter(pred)
-            jitter_gt = eval_jitter(gt)
-            self.jitter[self.counter:self.counter+batch_size-3*pred.shape[0]] = jitter
-            self.jitter_gt[self.counter:self.counter+batch_size-3*pred.shape[0]] = jitter_gt
+            
+            jitter = 0
+            jitter_gt = 0
+            for i in range(len(gt)):
+                jitter += eval_jitter(pred[i]).mean() / len(gt) # average across this batch
+                jitter_gt += eval_jitter(gt[i]).mean() / len(gt)
+            self.jitter[self.counter:self.counter+batch_size] = jitter
+            self.jitter_gt[self.counter:self.counter+batch_size] = jitter_gt
             
         self.counter += batch_size
 

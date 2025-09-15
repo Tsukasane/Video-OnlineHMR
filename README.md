@@ -1,40 +1,30 @@
-# Video-Based Online Human Mesh Recovery
-debug (use training pipeline to infer) -- hmr vimo true, /ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/lib/utils/pose_utils.py true
+# Video-based Online Human Mesh Recovery
 
---> 我们能否考虑添加一个action_rate 之类的，限制下一个time step的action不能过多的偏离当前帧的估计，因为默认sequential前后帧的人不能有过大的变化（不能瞬移）
---> check visualization的脚本，应该还是一个一个人估计，然后画在一起。
-smpl decoder在init pose基础上去做 /ocean/projects/cis240055p/yzhao16/tram/lib/models/modules.py
-过往帧的信息太多，少一点信息的使用，可以少一点patch，当前帧可以用更多的patch，试试加权
-try reshape to batch
-change causal attention to sliding window attention
-the order of self and cross atten, does q in cache really mean something?
-one frame, all patch, info moves to D dimension (spatial --> channel)
-haven't add the bbox
-# Findings
-# 在highly dynamics的setting下估计很差，在有occlusion的情况下还可以
-    - use shorter memory in cache? --> first visualize the correspondense in temporal transformer, which prev frame has higher correspondense?
-    - eliminate the pooling, since in some regions the detailed body pose seems inaccurate. Probably the spatial feature shouldn't be further compressed, as the 16*12 feature map is already a downsampled version.
-# Causal Transformer Decoder Arch
-# input: B, T, H, W, C  H*W=num_patch
-# training: windowsize=16, tril mask to apply attention
-    # learnable q tokens: a clue for output smpl --> after transformer, pass q tokens to ffn --> then to smpl head
-        # self-attn: q tokens & q tokens + mask
-        # cross-attn: q tokens & image features + mask
-# inference: one frame each time
-    # one frame q token each time --> update then get one frame SMPL paras
-        # caches use FIFO, to keep the memory updated
-        # self cache: previous q tokens (previous smpl clues)
-        # cross cache: previous image feature after projection
-    # cat all SMPL outputs together
+## Installation
+1. Clone this repo with the `--recursive` flag.
+```Bash
+git clone --recursive https://github.com/yufu-wang/tram
+```
+2. Creating a new anaconda environment.
+```Bash
+conda create -n tram python=3.10 -y
+conda activate tram
+bash install.sh
+```
+3. Compile DROID-SLAM. If you encountered difficulty in this step, please refer to its [official release](https://github.com/princeton-vl/DROID-SLAM) for more info. In this project, DROID is modified to support masking. 
+```Bash
+cd thirdparty/DROID-SLAM
+python setup.py install
+cd ../..
+```
 
+## Prepare data
+Register at [SMPLify](https://smplify.is.tue.mpg.de) and [SMPL](https://smpl.is.tue.mpg.de), whose usernames and passwords will be used by our script to download the SMPL models. In addition, we will fetch trained checkpoints and an example video. Note that thirdparty models have their own licenses. 
 
-# Findings
-* TRAM2f and TRAM3f only has small performance gap. The mean difference between TRAM and onlineTRAM is the SA/CA, also the temporal expansion.
-* pred 3 (didn't change architecture, i.e. the head dim)，loss ablation on prev / prev + curr / prev + curr + future
-* TRAM 的结构对temporal的信息没有WHAM那么强的依赖性，没有贯穿始终的h0，所以改成3帧对效果的影响相对没有那么大
-* TRAM 原本的训练已经使用了sliding window的形式，16frames in 16 frames out
-* TRAM 原本的validation sliding window 也是切好，没有重叠，因为最后estimate出来的结果直接“加”在init condition上，不像WHAM把init condition当成nn输入的一部分; "For human trajectory evaluation, we slice a sequence into 100-frame segments and evaluate 3D joint error after aligning the first two frames (W-MPJPE100) or the entire segment (WA-MPJPE100)."
-
+Run the following to fetch all models and checkpoints to `data/`. It also downloads `example_video.mov` for the demo.
+```Bash
+bash scripts/download_models.sh
+```
 
 ## Run demo on videos
 Run the following scripts **sequentially**. All results will be saved in a folder with the same name as the video.

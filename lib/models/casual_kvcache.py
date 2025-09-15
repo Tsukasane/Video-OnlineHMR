@@ -164,7 +164,7 @@ class TransformerBlock(nn.Module):
             k_mem = k_mem_t.view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
             v_mem = v_mem_t.view(B, -1, self.num_heads, self.head_dim).transpose(1, 2)
 
-        print(f"debug -- k_mem.shape {k_mem.shape}")
+        # print(f"debug -- k_mem.shape {k_mem.shape}")
 
         cross_scores = torch.matmul(q_, k_mem.transpose(-2, -1)) / (self.head_dim ** 0.5)
         cross_w = F.softmax(cross_scores, dim=-1)

@@ -40,7 +40,7 @@ TRAIN:
   LOSS_SCALE: 1
  
 TEST:
-  BATCH_SIZE: 16 
+  BATCH_SIZE: 8
   
 MODEL:
   CHECKPOINT: 'data/pretrain/hmr2b/epoch=35-step=1000000.ckpt'
