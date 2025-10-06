@@ -224,10 +224,39 @@ def cam_loss(batch):
 
     return loss.clamp(min=None, max=10.0)
 
+def action_rate_l2_loss(batch, valid_range=(0,2), batch_size=24):
+    """gt only used for conf"""
+    pred_keypoints_3d = batch['pred_keypoints_3d'] # 72, 49, 3
+    gt_keypoints_3d = batch['pose_3d'] # 72, 24, 4
+    has_pose_3d = batch['has_pose_3d'] # 72
+    device = pred_keypoints_3d.device
+
+    gt_keypoints_3d = select_valid(gt_keypoints_3d, batch_size)
+    has_pose_3d = select_valid(has_pose_3d, batch_size)
+
+    pred_keypoints_3d = pred_keypoints_3d[:, 25:, :]
+    conf = gt_keypoints_3d[:, :, -1].unsqueeze(-1).clone()
+    gt_keypoints_3d = gt_keypoints_3d[:, :, :-1].clone()
+    gt_keypoints_3d = gt_keypoints_3d[has_pose_3d == 1] # 72, 24, 3
+    conf = conf[has_pose_3d == 1]
+    pred_keypoints_3d = pred_keypoints_3d[has_pose_3d == 1]
+
+    if len(pred_keypoints_3d) > 0:
+        pred_pelvis = (pred_keypoints_3d[:, 2,:] + pred_keypoints_3d[:, 3,:]) / 2
+        pred_keypoints_3d = pred_keypoints_3d - pred_pelvis[:, None, :] # root-relative
+
+        pred_keypoints_3d = pred_keypoints_3d.reshape(batch_size, -1, 24, 3)
+        conf = conf.reshape(batch_size, -1, 24, 1)
+
+        action_diff = pred_keypoints_3d[:,1:,...] - pred_keypoints_3d[:,:-1,...] # (N-1, 24, 3) panilize sudden large action change
+        loss = (conf[:,1:,...] * (action_diff**2)).sum() / (conf[:,1:,...].sum() + 1e-8) # 24, 13, 24, 3 l2 on action rate
+
+    return loss
+
 
 collection = {'KPT2D': keypoint_loss, 'KPT3D': keypoint_3d_loss, 'SMPL':  smpl_losses,
               'CAM_S': cam_depth_loss, 'CAM': cam_loss, 'V3D': vertice_loss, 'ACCEL': acceleration_loss,
-              'SMPL_PLUS': smpl_losses_plus}
+              'SMPL_PLUS': smpl_losses_plus, 'ACTION_RATE_L2': action_rate_l2_loss,}
 
 
 def compile_criterion(cfg):
@@ -252,6 +281,7 @@ class BaseLoss(torch.nn.Module):
         for t, w in self.weights.items():
             loss = self.functions[t](batch, valid_range, batch_size)
             mixes_loss += w * loss
+            # print(f"debug -- {t} loss: {loss}")
             losses[t] = loss.item()
 
         losses['mixed'] = mixes_loss.item()

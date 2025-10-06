@@ -11,6 +11,19 @@ from pycocotools import mask as masktool
 from lib.pipeline import video2frames, detect_segment_track, visualize_tram
 from lib.camera import run_metric_slam, calibrate_intrinsics, align_cam_to_world
 
+import time
+
+import random, numpy as np, torch
+
+# set random seed
+seed = 42
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--video", type=str, default='./example_video.mov', help='input video')
@@ -32,6 +45,8 @@ os.makedirs(img_folder, exist_ok=True)
 print('Extracting frames ...')
 nframes = video2frames(file, img_folder)
 
+timestep1 = time.time() # start time counting from image sequence
+
 ##### Detection + SAM + DEVA-Track-Anything #####
 print('Detect, Segment, and Track ...')
 imgfiles = sorted(glob(f'{img_folder}/*.jpg'))
@@ -44,8 +59,14 @@ masks = np.array([masktool.decode(m) for m in masks_])
 masks = torch.from_numpy(masks)
 
 cam_int, is_static = calibrate_intrinsics(img_folder, masks, is_static=args.static_camera)
+
+timestep2 = time.time()
+
 cam_R, cam_T = run_metric_slam(img_folder, masks=masks, calib=cam_int, is_static=is_static)
+# find gravity direction for more conrrections
 wd_cam_R, wd_cam_T, spec_f = align_cam_to_world(imgfiles[0], cam_R, cam_T)
+
+timestep3 = time.time()
 
 camera = {'pred_cam_R': cam_R.numpy(), 'pred_cam_T': cam_T.numpy(), 
           'world_cam_R': wd_cam_R.numpy(), 'world_cam_T': wd_cam_T.numpy(),
@@ -56,3 +77,7 @@ np.save(f'{seq_folder}/boxes.npy', boxes_)
 np.save(f'{seq_folder}/masks.npy', masks_)
 np.save(f'{seq_folder}/tracks.npy', tracks_)
 
+timestep4 = time.time()
+
+print(f"intrinsics calibration time: {timestep2 - timestep1};\n metric slam time: {timestep3 - timestep2};\n all time: {timestep4 - timestep1}")
+print(f"fps: {nframes / (timestep4 - timestep1)}")
