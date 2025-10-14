@@ -57,7 +57,7 @@ def est_scale_gmof(slam_depth, pred_depth, lr=1, sigma=0.5, iters=500, msk=None)
 
 
 def est_scale_hybrid(slam_depth, pred_depth, sigma=0.5, msk=None, 
-                     far_thresh=10):
+                     far_thresh=10): # NOTE(yiwen) use zoedepth to init, then optimize the depth alignment
     """ Depth-align by iterative + robust least-square """
     if msk is None:
         msk = np.zeros_like(pred_depth)
@@ -69,7 +69,7 @@ def est_scale_hybrid(slam_depth, pred_depth, sigma=0.5, msk=None,
 
     robust = (msk<0.5) * (0<pred_depth) * (pred_depth<10)
     s_est = s[robust]
-    scale = np.median(s_est)
+    scale = np.median(s_est) # NOTE(yiwen) 取整个seq scaler的中位数
 
     for _ in range(10):
         slam_depth_0 = slam_depth * scale

@@ -72,6 +72,10 @@ python train.py --cfg configs/config_vimo.yaml
 ```
 # modify valid_range in ./lib/models/configs/config_vimo.yaml, also run_smpl.py
 bash scripts/emdb/run.sh
+# or separately
+python scripts/emdb/run_cam.py --split 2 --output_dir "results/emdb/camera"
+python scripts/emdb/run_smpl.py --split 2 --output_dir "results/emdb/smpl"
+python scripts/emdb/run_eval.py --split 2 --input_dir "results/emdb"
 ```
 
 **Metrics**

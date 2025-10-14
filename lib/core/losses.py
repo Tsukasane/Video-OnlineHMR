@@ -249,8 +249,13 @@ def action_rate_l2_loss(batch, valid_range=(0,2), batch_size=24):
         conf = conf.reshape(batch_size, -1, 24, 1)
 
         action_diff = pred_keypoints_3d[:,1:,...] - pred_keypoints_3d[:,:-1,...] # (N-1, 24, 3) panilize sudden large action change
-        loss = (conf[:,1:,...] * (action_diff**2)).sum() / (conf[:,1:,...].sum() + 1e-8) # 24, 13, 24, 3 l2 on action rate
+        loss_vel = (conf[:,1:,...] * (action_diff**2)).sum() / (conf[:,1:,...].sum() + 1e-8) # 24, 13, 24, 3 l2 on action rate
 
+        accel_diff = pred_keypoints_3d[:, 2:, ...] - 2 * pred_keypoints_3d[:, 1:-1, ...] + pred_keypoints_3d[:, :-2, ...]
+        loss_acc = (conf[:, 2:, ...] * (accel_diff**2)).sum() / (conf[:, 2:, ...].sum() + 1e-8)
+
+        loss = loss_vel + 0.5 * loss_acc
+    
     return loss
 
 

@@ -9,3 +9,6 @@ datasets/
 *.mp4
 *.txt
 README.md
+logs/
+pytorch3d/
+checkpoints/

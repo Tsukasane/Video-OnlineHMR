@@ -69,8 +69,8 @@ def run_metric_slam(img_folder, masks=None, calib=None, is_static=False):
     for i in tqdm(range(n)):
         t = tstamp[i]
         disp = disps[i]
-        pred_depth = pred_depths[i]
-        slam_depth = 1/disp
+        pred_depth = pred_depths[i] # NOTE(yiwen) zoedepth, metric depth
+        slam_depth = 1/disp # NOTE(yiwen) slam depth
         
         if masks is None:
             msk = None
@@ -79,11 +79,11 @@ def run_metric_slam(img_folder, masks=None, calib=None, is_static=False):
 
         scale = est_scale_hybrid(slam_depth, pred_depth, msk=msk) # NOTE(yiwen) can be online, per frame scale
         scales_.append(scale)
-    scale = np.median(scales_) # NOTE(yiwen) 加权平均
+    scale = np.median(scales_)
     
     # convert to metric-scale camera extrinsics: R_wc, T_wc
-    pred_cam_t = torch.tensor(traj[:, :3]) * scale
-    pred_cam_q = torch.tensor(traj[:, 3:])
+    pred_cam_t = torch.tensor(traj[:, :3]) * scale # NOTE(yiwen) 平移需要乘上scale
+    pred_cam_q = torch.tensor(traj[:, 3:]) # NOTE(yiwen) 旋转还是相等的
     pred_cam_r = quaternion_to_matrix(pred_cam_q[:,[3,0,1,2]])
 
     return pred_cam_r, pred_cam_t

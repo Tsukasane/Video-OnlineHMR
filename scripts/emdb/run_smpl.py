@@ -45,7 +45,7 @@ os.makedirs(savefolder, exist_ok=True)
 
 # HPS model
 device = 'cuda'
-model = get_hmr_vimo(checkpoint='/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/results/onlinetram_debug2_LR2_save/checkpoint_best.pth.tar').to(device)
+model = get_hmr_vimo(checkpoint='/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/results/online_videohmrv5_actionrate21_1/checkpoint_best.pth.tar').to(device)
 
 # Predict SMPL on EMDB (subset: spl)
 for i, root in enumerate(emdb):
@@ -64,8 +64,7 @@ for i, root in enumerate(emdb):
     
     db = ImageDataset(imgfiles, ann_boxes, img_focal=img_focal, 
                       img_center=img_center, normalization=True)
-    dataloader = torch.utils.data.DataLoader(db, batch_size=64, shuffle=False, num_workers=12)
-
+    dataloader = torch.utils.data.DataLoader(db, batch_size=64, shuffle=False, num_workers=4)
     items = []
     for i in tqdm(range(len(db))):
         item = db[i]
@@ -77,8 +76,6 @@ for i, root in enumerate(emdb):
         batch = {k: v.to(device) for k, v in batch.items() if type(v)==torch.Tensor}
         # batch.keys() ['img', 'img_idx', 'scale', 'center', 'img_focal', 'img_center']
         out, _ = model.inference_forward(batch)
-        # out, _ = model.forward(batch, valid_range=valid_range)
-        
         # out.keys() 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
 
     results = {'pred_cam': out['pred_cam'].cpu(),

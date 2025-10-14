@@ -23,7 +23,7 @@ def cal_spectrogram_similarity(gt_amp, pred_amp):
     # 1) MSE
     mse = torch.mean((gt_amp - pred_amp) ** 2)
 
-    # 2) LSD
+    # 2) LSD, but the log10 design is more for audio
     lsd = torch.sqrt(torch.mean((20 * torch.log10(gt_amp + 1e-6) - 20 * torch.log10(pred_amp + 1e-6)) ** 2))
 
     # 3) Corr
