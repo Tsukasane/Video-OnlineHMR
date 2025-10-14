@@ -36,7 +36,7 @@ from mast3r_slam.tracker import FrameTracker
 from mast3r_slam.visualization import WindowMsg, run_visualization
 from mast3r_slam.lietorch_utils import as_SE3
 import torch.multiprocessing as mp
-
+from lib.models import get_hmr_vimo
 
 # from lib.camera import run_metric_slam, align_cam_to_world
 from lib.pipeline.tools import arrange_boxes
@@ -221,6 +221,14 @@ def bbox_est(center, scale, img_focal, img_center):
 
     return bbox_info
 
+
+def camera_coord_HMR(hmr_model, imgfiles, boxes, cache):
+    results, cache = hmr_model.inference_chunk_ar(imgfiles, boxes,
+                    img_focal=img_focal, img_center=img_center, cache=cache)
+    
+    return results, cache
+    
+
 if __name__=='__main__':
     mp.set_start_method("spawn")
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -252,6 +260,7 @@ if __name__=='__main__':
 
     emdb = register_emdb(args) # dataset
     detector = init_detector(device) # ViTDet
+    hmr_model = get_hmr_vimo(checkpoint='/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/results/online_videohmrv2/checkpoint_best.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
 
     # Estimate camera motion on EMDB (subset: spl)
     for root in emdb:
@@ -273,22 +282,21 @@ if __name__=='__main__':
         ann = pkl.load(open(annfile, 'rb'))
         ext = ann['camera']['extrinsics']
         intr = ann['camera']['intrinsics']
-        ann_boxes = ann['bboxes']['bboxes'] # NOTE(yiwen) for emdb, boxes are given, if not, run detection?
+        ann_boxes = ann['bboxes']['bboxes'] # (2009, 4) NOTE(yiwen) for emdb, boxes are given, if not, run detection?
 
-        breakpoint()
         cam_int = [intr[0,0], intr[1,1], intr[0,2], intr[1,2]] 
         img_focal = (intr[0,0] +  intr[1,1]) / 2.
         img_center = intr[:2, 2]
 
         # init
-        db_hmr = ImageDataset(imgfiles, ann_boxes, img_focal=img_focal, 
-                      img_center=img_center, normalization=True)
-        items = []
-        for i in tqdm(range(len(db_hmr))):
-            item = db_hmr[i]
-            items.append(item)
+        # db_hmr = ImageDataset(imgfiles, ann_boxes, img_focal=img_focal, 
+        #               img_center=img_center, normalization=True)
+        # items = []
+        # for i in tqdm(range(len(db_hmr))):
+        #     item = db_hmr[i]
+        #     items.append(item)
 
-        batch = default_collate(items)
+        # batch = default_collate(items)
        
         if args.calib:
             with open(args.calib, "r") as f:
@@ -351,6 +359,17 @@ if __name__=='__main__':
 
         # NOTE(yiwen) frontend loop, incrementally loop all frames
         print(f"Start per frame processing")
+        img_chunk = []
+        box_chunk = []
+
+        # cam coords
+        pred_cam = []
+        pred_pose = []
+        pred_shape = []
+        pred_rotmat = []
+        pred_trans = []
+
+        frame_feat_cache = None
         while True:
             mode = states.get_mode()
             msg = try_get_msg(viz2main)
@@ -386,6 +405,31 @@ if __name__=='__main__':
                     boxes = np.hstack([boxes, confs[:, None]])
                     boxes = arrange_boxes(boxes, mode='size', min_size=100)
     
+            this_img_file = imgfiles[i]
+            if len(img_chunk)==0: # initialize, cache=2
+                img_chunk.append(imgfiles[i+2])
+                img_chunk.append(imgfiles[i+1])
+                box_chunk.append(boxes)
+                box_chunk.append(boxes)
+            elif len(img_chunk)>=3: # FIFO
+                img_chunk.pop(0)
+                box_chunk.pop(0)
+            img_chunk.append(this_img_file)
+            box_chunk.append(boxes)
+            
+            img_ck = np.array(img_chunk)
+            box_ck = np.array(box_chunk).reshape(-1, 5)
+
+            frame_results, frame_feat_cache = camera_coord_HMR(hmr_model, img_ck, box_ck, frame_feat_cache)
+
+            print(f"cache length {frame_feat_cache['layers'][0]['mem_k'].shape[0]}")
+
+            pred_cam.append(frame_results['pred_cam'])
+            pred_pose.append(frame_results['pred_pose'])
+            pred_shape.append(frame_results['pred_shape'])
+            pred_rotmat.append(frame_results['pred_rotmat'])
+            pred_trans.append(frame_results['pred_trans'])
+
             """
             TODO(yiwen) 
             camcoord_hmr = mp.process(target=function,args=())
@@ -476,11 +520,21 @@ if __name__=='__main__':
             i += 1
 
             # TODO(yiwen) 这里其实应该每一帧去做多进程？然后.join()
-            breakpoint()
+            # breakpoint()
+
+            # TODO(yiwen) add depth and world recons
 
 
 
         ### --- Save Global Results ---
+
+        cam_coord_results = {'pred_cam': torch.cat(pred_cam),
+                'pred_pose': torch.cat(pred_pose),
+                'pred_shape': torch.cat(pred_shape),
+                'pred_rotmat': torch.cat(pred_rotmat),
+                'pred_trans': torch.cat(pred_trans)}
+        
+
         # NOTE(yiwen) save the final results after global optimization
         if dataset.save_results:
             save_dir, seq_name = eval.prepare_savedir(args, dataset)

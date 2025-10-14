@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import einops
 
-from .components.pose_transformer import TransformerDecoder
+from components.pose_transformer import TransformerDecoder
 
 import numpy as np
 from skimage.util.shape import view_as_windows
@@ -421,6 +421,7 @@ if __name__=="__main__":
                                                                             t=t, 
                                                                             device=device, 
                                                                             cache=cache)
+            print(f"cache {cache['layers'][0]['mem_k'].shape}") # TODO(yiwen) check the cache here
 
     print("smpl pose shape:", smpl_pose.shape)    # B*(T-max_memt), 144
     print("smpl shape shape:", smpl_shape.shape)    # B*(T-max_memt), 10

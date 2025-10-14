@@ -152,8 +152,9 @@ class HMR_VIMO(nn.Module):
         
         return out, iter_preds
     
-    def inference_forward(self, batch, valid_range=(0,2), is_train=False, is_valid=False, device='cuda', **kwargs): # emdb2 eval
+    def inference_forward(self, batch, valid_range=(0,2), is_train=False, is_valid=False, device='cuda', cache=None, **kwargs): # emdb2 eval
         '''
+        TODO(yiwen) cache 需要传到这个函数外边，self.backbone 每次只提一个image的feature
         T=1
         Args:
             - batch (dict)
@@ -189,7 +190,6 @@ class HMR_VIMO(nn.Module):
         # estimate focal length, and bbox 
         bbox_info = self.bbox_est(center, scale, img_focal, img_center) # 128, 3
 
-        # TODO(yiwen) mask this also ar if inference
         # backbone 
         with autocast('cuda'):
             # B*N*T=2*24*3, 3, H, W --> BT, C=1280, h, w
@@ -204,7 +204,6 @@ class HMR_VIMO(nn.Module):
         feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only
         debug = True
         if not is_train: # in inference / validation
-            cache = None
             inference_seqlen = feature.shape[1]
 
             pred_pose, pred_shape, pred_cam = [], [], []
@@ -296,9 +295,10 @@ class HMR_VIMO(nn.Module):
         trans_full = self.get_trans(out['pred_cam'], center, scale, img_focal, img_center)
         out['trans_full'] = trans_full
 
-        return out, iter_preds
+        return out, iter_preds, cache # TODO(yiwen) add return cache
+    
 
-    def inference_chunk_ar(self, imgfiles, boxes, img_focal, img_center, device='cuda'): # for vis
+    def inference_chunk_ar(self, imgfiles, boxes, img_focal, img_center, device='cuda', cache=None): # for vis
         db = TrackDataset(imgfiles, boxes, img_focal=img_focal, 
                         img_center=img_center, normalization=True, dilate=1.2)
 
@@ -311,7 +311,7 @@ class HMR_VIMO(nn.Module):
         with torch.no_grad():
             batch = {k: v.to(device) for k, v in batch.items() if type(v)==torch.Tensor}
     
-            out, _ = self.inference_forward(batch)
+            out, _, cache = self.inference_forward(batch, cache=cache)
 
         results = {'pred_cam': out['pred_cam'].cpu(),
                 'pred_pose': out['pred_pose'].cpu(),
@@ -321,7 +321,23 @@ class HMR_VIMO(nn.Module):
                 'img_focal': img_focal,
                 'img_center': img_center}
         
-        return results
+        return results, cache
+
+
+    # def inference_ar_online(self, imgfiles, boxes, img_focal=None, img_center=None, valid=None, frame=None, device='cuda'):
+    #     """
+    #     imgfiles: (3,) numpy.array 3 frames chunk, each time inference the result of the last frame
+    #     boxes: (3, 5) 3 frames boxes, the last dim is confidence
+    #     """
+
+    #     # TODO(yiwen) remove the boxes?
+
+    #     # NOTE(yiwen) this chunk is only for all tracking results
+    #     results = self.inference_chunk_ar(imgfiles, boxes, img_focal=img_focal, img_center=img_center)
+        
+    #     return results
+
+
 
     def inference_ar(self, imgfiles, boxes, img_focal=None, img_center=None, valid=None, frame=None, device='cuda'):
         nfile = len(imgfiles)
