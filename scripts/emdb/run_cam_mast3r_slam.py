@@ -10,7 +10,7 @@ import numpy as np
 import pickle as pkl
 from glob import glob
 from tqdm import tqdm
-
+import open3d as o3d
 import datetime
 import pathlib
 import sys
@@ -20,6 +20,8 @@ import lietorch
 import torch
 import tqdm
 import yaml
+import trimesh
+import imageio
 from mast3r_slam.global_opt import FactorGraph
 
 from mast3r_slam.config import load_config, config, set_global_config
@@ -37,10 +39,15 @@ from mast3r_slam.visualization import WindowMsg, run_visualization
 from mast3r_slam.lietorch_utils import as_SE3
 import torch.multiprocessing as mp
 from lib.models import get_hmr_vimo
+from pytorch3d.transforms import quaternion_to_matrix
 
 # from lib.camera import run_metric_slam, align_cam_to_world
 from lib.pipeline.tools import arrange_boxes
 from lib.utils.utils_detectron2 import DefaultPredictor_Lazy
+
+from lib.utils.eval_utils import *
+from lib.utils.rotation_conversions import *
+from lib.vis.traj import *
 
 from torch.amp import autocast
 from detectron2.config import LazyConfig
@@ -49,14 +56,23 @@ from lib.datasets.image_dataset import ImageDataset
 from torch.utils.data import default_collate
 
 """
-python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam"
+python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz
 
 multiprocess: one frame in
 slam-frontend 
 slam-backend
 human cam coord hmr
 viser visualization(?)
+
+TODO(yiwen) check the usage of cache
 """
+
+single_color1 = [
+    [1.0, 0.2, 0.0],
+]
+single_color2 = [
+    [0.0, 0.8, 1.0],
+]
 
 def relocalization(frame, keyframes, factor_graph, retrieval_database):
     # we are adding and then removing from the keyframe, so we need to be careful.
@@ -229,6 +245,46 @@ def camera_coord_HMR(hmr_model, imgfiles, boxes, cache):
     return results, cache
     
 
+def load_camera_poses(cam_t, cam_q, scale=0.2, color_offset=0, gt=True):
+    """
+    Load camera poses from text file.
+    Each line: tx ty tz qx qy qz qw
+    Returns a list of LineSet pyramids.
+    """
+    
+    tx, ty, tz = cam_t
+    qx, qy, qz, qw = cam_q
+
+    # quaternion → rotation matrix
+    R = o3d.geometry.get_rotation_matrix_from_quaternion([qw, qx, qy, qz])
+    t = np.array([tx, ty, tz])
+
+    # pyramid points (camera frustum)
+    cam_points = np.array([
+        [0, 0, 0],
+        [scale, scale, scale * 1.5],
+        [scale, -scale, scale * 1.5],
+        [-scale, -scale, scale * 1.5],
+        [-scale, scale, scale * 1.5],
+    ])
+    cam_lines = [
+        [0, 1], [0, 2], [0, 3], [0, 4],
+        [1, 2], [2, 3], [3, 4], [4, 1]
+    ]
+
+    cam = o3d.geometry.LineSet()
+    cam.points = o3d.utility.Vector3dVector(cam_points @ R.T + t)
+    cam.lines = o3d.utility.Vector2iVector(cam_lines)
+    # Use color_offset to differentiate between two trajectories
+    if not gt:
+        cam.colors = o3d.utility.Vector3dVector([single_color1[0]] * len(cam_lines))
+    else:
+        cam.colors = o3d.utility.Vector3dVector([single_color2[0]] * len(cam_lines))
+            # cam.colors = o3d.utility.Vector3dVector([rainbow_colors[(l_id + color_offset) % 20]] * len(cam_lines))
+
+    return cam
+
+
 if __name__=='__main__':
     mp.set_start_method("spawn")
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -250,7 +306,6 @@ if __name__=='__main__':
     load_config(args.config)
     # print(config)
 
-    # Save folder
     savefolder = args.output_dir
     os.makedirs(savefolder, exist_ok=True)
 
@@ -261,6 +316,10 @@ if __name__=='__main__':
     emdb = register_emdb(args) # dataset
     detector = init_detector(device) # ViTDet
     hmr_model = get_hmr_vimo(checkpoint='/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/results/online_videohmrv2/checkpoint_best.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
+
+    # SMPL
+    smpl = SMPL()
+    smpls = {g:SMPL(gender=g) for g in ['neutral', 'male', 'female']}
 
     # Estimate camera motion on EMDB (subset: spl)
     for root in emdb:
@@ -277,7 +336,7 @@ if __name__=='__main__':
         dataset.subsample(config["dataset"]["subsample"]) # set to 1 by default
         rimg_h, rimg_w = dataset.get_img_shape()[0] # resized image and resized shape
         
-        # load annotations
+        # load annotations if eval on emdb2
         annfile = f'{root}/{root.split("/")[-2]}_{root.split("/")[-1]}_data.pkl'
         ann = pkl.load(open(annfile, 'rb'))
         ext = ann['camera']['extrinsics']
@@ -287,16 +346,6 @@ if __name__=='__main__':
         cam_int = [intr[0,0], intr[1,1], intr[0,2], intr[1,2]] 
         img_focal = (intr[0,0] +  intr[1,1]) / 2.
         img_center = intr[:2, 2]
-
-        # init
-        # db_hmr = ImageDataset(imgfiles, ann_boxes, img_focal=img_focal, 
-        #               img_center=img_center, normalization=True)
-        # items = []
-        # for i in tqdm(range(len(db_hmr))):
-        #     item = db_hmr[i]
-        #     items.append(item)
-
-        # batch = default_collate(items)
        
         if args.calib:
             with open(args.calib, "r") as f:
@@ -352,13 +401,10 @@ if __name__=='__main__':
         backend = mp.Process(target=run_backend, args=(config, model, states, keyframes, K))
         backend.start()
 
+        # NOTE(yiwen) frontend loop, incrementally loop all frames
         i = 0
         fps_timer = time.time()
-
         frames = []
-
-        # NOTE(yiwen) frontend loop, incrementally loop all frames
-        print(f"Start per frame processing")
         img_chunk = []
         box_chunk = []
 
@@ -370,28 +416,171 @@ if __name__=='__main__':
         pred_trans = []
 
         frame_feat_cache = None
+        naive_scaler = 1 # init depth-based scaler
+        
+        imgs = [] # for rendered images
+        print(f"Start per frame processing")
+
+        visualize_hcgif = True
+        # Offscreen renderer
+        angle = 180
+        w, h = 800, 600
+        out_gif = "human_camera.gif"
+        render = o3d.visualization.rendering.OffscreenRenderer(w, h)
+
+        # Background black
+        render.scene.set_background([0, 0, 0, 1])
+
+        # cloud material
+        human_mat = o3d.visualization.rendering.MaterialRecord()
+        human_mat.shader = "defaultLit"
+        cam_mat = o3d.visualization.rendering.MaterialRecord()
+        cam_mat.shader = "unlitLine"
+        
+        # start looping the video seq
         while True:
+            if i>=20: # TODO(yiwen) debug
+                break
             mode = states.get_mode()
             msg = try_get_msg(viz2main)
             last_msg = msg if msg is not None else last_msg
             if last_msg.is_terminated:
                 states.set_mode(Mode.TERMINATED)
                 break
-
             if last_msg.is_paused and not last_msg.next:
                 states.pause()
                 time.sleep(0.01)
                 continue
-
             if not last_msg.is_paused:
                 states.unpause()
-
             if i == len(dataset): # NOTE(yiwen) end of the dataset
                 states.set_mode(Mode.TERMINATED)
                 break
 
             timestamp, img = dataset[i] # the original size, 0-1 scale
             img_cv2 = dataset.read_img(i) # the original size, 0-255 scale
+
+            if save_frames:
+                frames.append(img)
+
+            # get frames last camera pose
+            T_WC = (
+                lietorch.Sim3.Identity(1, device=device) # SE(3)
+                if i == 0
+                else states.get_frame().T_WC
+            )
+            frame = create_frame(i, img, T_WC, img_size=dataset.img_size, device=device)
+
+            if mode == Mode.INIT:
+                # Initialize via mono inference, and encoded features neeed for database
+                X_init, C_init = mast3r_inference_mono(model, frame)
+                frame.update_pointmap(X_init, C_init)
+                keyframes.append(frame)
+                states.queue_global_optimization(len(keyframes) - 1)
+                states.set_mode(Mode.TRACKING)
+                states.set_frame(frame)
+                i += 1
+                continue
+
+            if mode == Mode.TRACKING:
+                add_new_kf, match_info, try_reloc = tracker.track(frame)
+                if try_reloc:
+                    states.set_mode(Mode.RELOC)
+                states.set_frame(frame)
+
+                # Extract depth information from current frame
+                if frame.X_canon is not None:
+
+                    # TODO(yiwen) SLAM output camera coords depth
+                    depths = frame.X_canon[:, 2].cpu().numpy()  # Z coordinates as depth
+                    confidences = frame.get_average_conf().cpu().numpy()
+                    
+                    # Reshape to image dimensions
+                    img_shape = frame.img_shape.flatten()[:2].cpu().numpy()  # [H, W]
+                    depth_map = depths.reshape(img_shape[0], img_shape[1])
+                    conf_map = confidences.reshape(img_shape[0], img_shape[1])
+                    
+                    # Filter valid depths (remove invalid/negative depths)
+                    valid_mask = depths > 0
+                    valid_depths = depths[valid_mask]
+                    valid_confs = confidences[valid_mask]
+
+                    # TODO(yiwen) real world depth/distance?
+                    X_canon_world = T_WC.act(frame.X_canon)  # Transform to world coordinates     
+                    # Extract world coordinates
+                    X_world = X_canon_world[:, 0].cpu().numpy()  # X coordinates in world
+                    Y_world = X_canon_world[:, 1].cpu().numpy()  # Y coordinates in world  
+                    Z_world = X_canon_world[:, 2].cpu().numpy()  # Z coordinates in world
+                    
+                    # Calculate distances from world origin
+                    distances_world = np.sqrt(X_world**2 + Y_world**2 + Z_world**2)
+                    valid_distances = distances_world[valid_mask]
+                    
+                    """
+                    slam depth * scale = pred depth
+
+                    pred_cam_t = torch.tensor(traj[:, :3]) * scale
+                    pred_cam_q = torch.tensor(traj[:, 3:])
+                    """
+                    naive_scaler = valid_distances.min() / valid_depths.min() # has a better accuracy in nearby points
+                    if len(valid_distances) > 0:
+                        print(f"Frame {i}: World distance range [{valid_distances.min():.3f}, {valid_distances.max():.3f}] meters")
+                        print(f"Frame {i}: Camera pose - Translation: {T_WC.data[0, :3].cpu().numpy()}")
+                        print(f"Frame {i}: Camera pose - Rotation: {T_WC.data[0, 3:].cpu().numpy()}")        
+                    
+                    if len(valid_depths) > 0:
+                        print(f"Frame {i}: Depth range [{valid_depths.min():.3f}, {valid_depths.max():.3f}]")
+                        print(f"Frame {i}: Valid depth pixels: {len(valid_depths)}/{len(depths)}")
+                        print(f"Frame {i}: Avg confidence: {valid_confs.mean():.3f}")
+
+                        # Optional: Save depth map as image
+                        if i % 10 == 0:  # Save every 10th frame
+                            depth_normalized = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
+                            depth_uint8 = (depth_normalized * 255).astype(np.uint8)
+                            cv2.imwrite(f"depth_frame_{i:06d}.png", depth_uint8)
+
+                        
+            elif mode == Mode.RELOC:
+                X, C = mast3r_inference_mono(model, frame)
+                frame.update_pointmap(X, C)
+                states.set_frame(frame)
+                states.queue_reloc()
+                
+                # Extract depth information during relocalization
+                if frame.X_canon is not None:
+                    depths = frame.X_canon[:, 2].cpu().numpy()
+                    confidences = frame.get_average_conf().cpu().numpy()
+                    
+                    img_shape = frame.img_shape.flatten()[:2].cpu().numpy()
+                    depth_map = depths.reshape(img_shape[0], img_shape[1])
+                    
+                    valid_mask = depths > 0
+                    valid_depths = depths[valid_mask]
+                    
+                    if len(valid_depths) > 0:
+                        print(f"Frame {i} (RELOC): Depth range [{valid_depths.min():.3f}, {valid_depths.max():.3f}]")
+                        print(f"Frame {i} (RELOC): Valid depth pixels: {len(valid_depths)}/{len(depths)}")
+                
+                # In single threaded mode, make sure relocalization happen for every frame
+                while config["single_thread"]:
+                    with states.lock:
+                        if states.reloc_sem.value == 0:
+                            break
+                    time.sleep(0.01)
+            else:
+                raise Exception("Invalid mode")
+
+            # save pre frame results
+            if dataset.save_results:
+                save_dir, seq_name = eval.prepare_savedir(args, dataset)
+                traj_file = save_dir / f"{seq_name}_incremental_all.txt"
+                with open(traj_file, "a") as f:  # append
+                    t = dataset.timestamps[frame.frame_id]
+                    T_WC = as_SE3(frame.T_WC)
+                    x, y, z, qx, qy, qz, qw = T_WC.data.numpy().reshape(-1)
+                    f.write(f"{naive_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
+                    # f.write(f"{t} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
+            
 
             ### --- Detection ---
             with torch.no_grad():
@@ -436,60 +625,65 @@ if __name__=='__main__':
             camcoord_hmr.start()
             """
 
-            if save_frames:
-                frames.append(img)
+            # world coord camera trajectory
+            current_camt = torch.tensor([naive_scaler*x, naive_scaler*y, naive_scaler*z]).unsqueeze(0)
+            current_camq = torch.tensor([qw, qx, qy, qz]).unsqueeze(0)
 
+            current_camr = quaternion_to_matrix(current_camq)
 
-            # Single frame SLAM frontend
-            # get frames last camera pose
-            T_WC = (
-                lietorch.Sim3.Identity(1, device=device) # SE(3)
-                if i == 0
-                else states.get_frame().T_WC
-            )
-            frame = create_frame(i, img, T_WC, img_size=dataset.img_size, device=device)
+            # frame_results['pred_rotmat'] # T, 24, 3, 3
+            # frame_results['pred_shape'] # T, 10
+            # frame_results['pred_trans'] # T, 1, 3
 
-            if mode == Mode.INIT:
-                # Initialize via mono inference, and encoded features neeed for database
-                X_init, C_init = mast3r_inference_mono(model, frame)
-                frame.update_pointmap(X_init, C_init)
-                keyframes.append(frame)
-                states.queue_global_optimization(len(keyframes) - 1)
-                states.set_mode(Mode.TRACKING)
-                states.set_frame(frame)
-                i += 1
-                continue
+            pred = smpls['neutral'](body_pose=frame_results['pred_rotmat'][:,1:], 
+                                    global_orient=frame_results['pred_rotmat'][:,[0]], 
+                                    betas=frame_results['pred_shape'], 
+                                    transl=frame_results['pred_trans'].squeeze(1),
+                                    pose2rot=False, 
+                                    default_smpl=True)
+            pred_vert = pred.vertices
+            pred_j3d = pred.joints[:, :24]
 
-            if mode == Mode.TRACKING:
-                add_new_kf, match_info, try_reloc = tracker.track(frame)
-                if try_reloc:
-                    states.set_mode(Mode.RELOC)
-                states.set_frame(frame)
+            # world coords human mesh
+            pred_vert_w = torch.einsum('bij,bnj->bni', current_camr, pred_vert) + current_camt[:,None] # 1, 6890, 3
+            pred_j3d_w = torch.einsum('bij,bnj->bni', current_camr, pred_j3d) + current_camt[:,None] # 1, 24, 3
+            pred_ori_w = torch.einsum('bij,bjk->bik', current_camr, frame_results['pred_rotmat'][:,0]) # 1, 3, 3
 
-            elif mode == Mode.RELOC:
-                X, C = mast3r_inference_mono(model, frame)
-                frame.update_pointmap(X, C)
-                states.set_frame(frame)
-                states.queue_reloc()
-                # In single threaded mode, make sure relocalization happen for every frame
-                while config["single_thread"]:
-                    with states.lock:
-                        if states.reloc_sem.value == 0:
-                            break
-                    time.sleep(0.01)
+            if visualize_hcgif:
+                cam_frame = load_camera_poses(current_camt[0], current_camq[0]) # o3d camera
+                mesh = trimesh.Trimesh(vertices=pred_vert_w[0], faces=smpls['neutral'].faces)
+                human_mesh = o3d.geometry.TriangleMesh()
+                human_mesh.vertices = o3d.utility.Vector3dVector(mesh.vertices)
+                human_mesh.triangles = o3d.utility.Vector3iVector(mesh.faces)
+                human_mesh.compute_vertex_normals()
+                human_mesh.paint_uniform_color([0.8, 0.6, 0.6])
 
-            else:
-                raise Exception("Invalid mode")
+                # NOTE(yiwen) if only keep the current, set all names to be the same
+                render.scene.add_geometry(f"human{i}", human_mesh, human_mat)
+                render.scene.add_geometry(f"cam_frame{i}", cam_frame, cam_mat)
 
-            # save pre frame results
-            if dataset.save_results:
-                save_dir, seq_name = eval.prepare_savedir(args, dataset)
-                traj_file = save_dir / f"{seq_name}_incremental_all.txt"
-                with open(traj_file, "a") as f:  # append
-                    t = dataset.timestamps[frame.frame_id]
-                    T_WC = as_SE3(frame.T_WC)
-                    x, y, z, qx, qy, qz, qw = T_WC.data.numpy().reshape(-1)
-                    f.write(f"{t} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
+                # Camera view setup
+                center = human_mesh.get_center()
+                up = [0, 1, 0]
+                view_radius = 3
+                eye0 = center + np.array([view_radius, view_radius, view_radius])
+
+                radius = np.linalg.norm(eye0 - center)
+
+                # Yaw around the vertical (Y) axis, keeping camera above the object
+                theta = np.deg2rad(angle)
+                eye = center + radius * np.array([np.sin(theta), -0.2, np.cos(theta)])  # 0.2: small height above ground
+                up = np.array([0, 1, 0])  # keep world Y up
+                render.setup_camera(60, center, eye, up)
+
+                img_o3d = render.render_to_image()
+
+                # flip vertically for correct image orientation
+                img_np = np.asarray(img_o3d)
+                img_np = np.flipud(img_np)
+                img_np = np.fliplr(img_np)
+                imgs.append(img_np)
+
 
             # save key frame results
             if add_new_kf:
@@ -504,8 +698,8 @@ if __name__=='__main__':
                         T_WC = as_SE3(frame.T_WC)
                         x, y, z, qx, qy, qz, qw = T_WC.data.numpy().reshape(-1)
                         if len(keyframes)==2:
-                            f.write("0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0\n")
-                        f.write(f"{t} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
+                            f.write("0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0\n") #TODO(yiwen) may need to make to first one to 1
+                        f.write(f"{naive_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
 
                 # In single threaded mode, wait for the backend to finish
                 while config["single_thread"]:
@@ -524,10 +718,14 @@ if __name__=='__main__':
 
             # TODO(yiwen) add depth and world recons
 
+        # Save gif
+        imageio.mimsave(out_gif, imgs, fps=10)
+        print(f"✅ Saved gif to {out_gif}")
+
+        breakpoint()
 
 
         ### --- Save Global Results ---
-
         cam_coord_results = {'pred_cam': torch.cat(pred_cam),
                 'pred_pose': torch.cat(pred_pose),
                 'pred_shape': torch.cat(pred_shape),
@@ -567,10 +765,10 @@ if __name__=='__main__':
         """
 
         # TODO(yiwen) write a API, given img_folder and cam_int, probably modify from slam demo
-        cam_R, cam_T = run_metric_slam(img_folder, masks=None, calib=cam_int)
+        # cam_R, cam_T = run_metric_slam(img_folder, masks=None, calib=cam_int)
         # wd_cam_R, wd_cam_T, spec_f = align_cam_to_world(imgfiles[0], cam_R, cam_T)
 
-        camera = {'pred_cam_R': cam_R.numpy(), 'pred_cam_T': cam_T.numpy(), 
-                'img_focal': cam_int[0], 'img_center': cam_int[2:]}
+        # camera = {'pred_cam_R': cam_R.numpy(), 'pred_cam_T': cam_T.numpy(), 
+        #         'img_focal': cam_int[0], 'img_center': cam_int[2:]}
 
     
