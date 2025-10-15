@@ -9,15 +9,11 @@ import argparse
 import numpy as np
 import pickle as pkl
 from glob import glob
-from tqdm import tqdm
 import open3d as o3d
 import datetime
 import pathlib
-import sys
 import time
-import cv2
 import lietorch
-import torch
 import tqdm
 import yaml
 import trimesh
@@ -46,14 +42,10 @@ from lib.pipeline.tools import arrange_boxes
 from lib.utils.utils_detectron2 import DefaultPredictor_Lazy
 
 from lib.utils.eval_utils import *
-from lib.utils.rotation_conversions import *
 from lib.vis.traj import *
 
 from torch.amp import autocast
 from detectron2.config import LazyConfig
-
-from lib.datasets.image_dataset import ImageDataset
-from torch.utils.data import default_collate
 
 """
 python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz
@@ -63,8 +55,6 @@ slam-frontend
 slam-backend
 human cam coord hmr
 viser visualization(?)
-
-TODO(yiwen) check the usage of cache
 """
 
 single_color1 = [
@@ -299,7 +289,7 @@ if __name__=='__main__':
     parser.add_argument("--config", default="configs/base.yaml")
     parser.add_argument("--save-as", default="default")
     parser.add_argument("--no-viz", action="store_true")
-    parser.add_argument("--calib", default="")
+    parser.add_argument("--calib", default="") # TODO(yiwen) add some of the configs to parser
 
     args = parser.parse_args()
 
@@ -315,7 +305,7 @@ if __name__=='__main__':
 
     emdb = register_emdb(args) # dataset
     detector = init_detector(device) # ViTDet
-    hmr_model = get_hmr_vimo(checkpoint='/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/results/online_videohmrv2/checkpoint_best.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
+    hmr_model = get_hmr_vimo(checkpoint='/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/results/online_videohmrv5_actionrate21_1/checkpoint_best.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
 
     # SMPL
     smpl = SMPL()
@@ -330,7 +320,7 @@ if __name__=='__main__':
         img_folder = f'{root}/images'
         imgfiles = sorted(glob(f'{root}/images/*.jpg'))
 
-        # --lightweight dataset loading (read and sort images)
+        # lightweight dataset loading (read and sort images)
         img_h, img_w = cv2.imread(os.path.join(img_folder, "00000.jpg")).shape[:2]
         dataset = load_dataset(img_folder)
         dataset.subsample(config["dataset"]["subsample"]) # set to 1 by default
@@ -341,7 +331,7 @@ if __name__=='__main__':
         ann = pkl.load(open(annfile, 'rb'))
         ext = ann['camera']['extrinsics']
         intr = ann['camera']['intrinsics']
-        ann_boxes = ann['bboxes']['bboxes'] # (2009, 4) NOTE(yiwen) for emdb, boxes are given, if not, run detection?
+        ann_boxes = ann['bboxes']['bboxes'] # (2009, 4) NOTE(yiwen) for emdb, boxes are given, if not, run detection
 
         cam_int = [intr[0,0], intr[1,1], intr[0,2], intr[1,2]] 
         img_focal = (intr[0,0] +  intr[1,1]) / 2.
@@ -422,6 +412,7 @@ if __name__=='__main__':
         print(f"Start per frame processing")
 
         visualize_hcgif = True
+        visualize_depth = False
         # Offscreen renderer
         angle = 180
         w, h = 800, 600
@@ -430,6 +421,7 @@ if __name__=='__main__':
 
         # Background black
         render.scene.set_background([0, 0, 0, 1])
+        set_render_camera = False # render cam (the third viewpoint)
 
         # cloud material
         human_mat = o3d.visualization.rendering.MaterialRecord()
@@ -439,8 +431,10 @@ if __name__=='__main__':
         
         # start looping the video seq
         while True:
-            if i>=20: # TODO(yiwen) debug
+            if i>=200: # TODO(yiwen) debug
                 break
+
+            ###### Camera Pose SLAM --> output Cam_R, Cam_T, also camera coordinates absolute depth (then convert to world depth) ######
             mode = states.get_mode()
             msg = try_get_msg(viz2main)
             last_msg = msg if msg is not None else last_msg
@@ -471,6 +465,7 @@ if __name__=='__main__':
             )
             frame = create_frame(i, img, T_WC, img_size=dataset.img_size, device=device)
 
+            # Mast3r-SLAM init
             if mode == Mode.INIT:
                 # Initialize via mono inference, and encoded features neeed for database
                 X_init, C_init = mast3r_inference_mono(model, frame)
@@ -482,6 +477,7 @@ if __name__=='__main__':
                 i += 1
                 continue
 
+            # Mast3r-SLAM tracking
             if mode == Mode.TRACKING:
                 add_new_kf, match_info, try_reloc = tracker.track(frame)
                 if try_reloc:
@@ -505,14 +501,13 @@ if __name__=='__main__':
                     valid_depths = depths[valid_mask]
                     valid_confs = confidences[valid_mask]
 
-                    # TODO(yiwen) real world depth/distance?
                     X_canon_world = T_WC.act(frame.X_canon)  # Transform to world coordinates     
                     # Extract world coordinates
                     X_world = X_canon_world[:, 0].cpu().numpy()  # X coordinates in world
                     Y_world = X_canon_world[:, 1].cpu().numpy()  # Y coordinates in world  
                     Z_world = X_canon_world[:, 2].cpu().numpy()  # Z coordinates in world
                     
-                    # Calculate distances from world origin
+                    # Calculate distances from world origin NOTE(yiwen) cam coord z only, world coord euclidean distance
                     distances_world = np.sqrt(X_world**2 + Y_world**2 + Z_world**2)
                     valid_distances = distances_world[valid_mask]
                     
@@ -523,23 +518,22 @@ if __name__=='__main__':
                     pred_cam_q = torch.tensor(traj[:, 3:])
                     """
                     naive_scaler = valid_distances.min() / valid_depths.min() # has a better accuracy in nearby points
-                    if len(valid_distances) > 0:
-                        print(f"Frame {i}: World distance range [{valid_distances.min():.3f}, {valid_distances.max():.3f}] meters")
-                        print(f"Frame {i}: Camera pose - Translation: {T_WC.data[0, :3].cpu().numpy()}")
-                        print(f"Frame {i}: Camera pose - Rotation: {T_WC.data[0, 3:].cpu().numpy()}")        
+                    # if len(valid_distances) > 0:
+                    #     print(f"Frame {i}: World distance range [{valid_distances.min():.3f}, {valid_distances.max():.3f}] meters")
+                    #     print(f"Frame {i}: Camera pose - Translation: {T_WC.data[0, :3].cpu().numpy()}")
+                    #     print(f"Frame {i}: Camera pose - Rotation: {T_WC.data[0, 3:].cpu().numpy()}")        
                     
                     if len(valid_depths) > 0:
-                        print(f"Frame {i}: Depth range [{valid_depths.min():.3f}, {valid_depths.max():.3f}]")
-                        print(f"Frame {i}: Valid depth pixels: {len(valid_depths)}/{len(depths)}")
-                        print(f"Frame {i}: Avg confidence: {valid_confs.mean():.3f}")
+                        # print(f"Frame {i}: Depth range [{valid_depths.min():.3f}, {valid_depths.max():.3f}]")
+                        # print(f"Frame {i}: Valid depth pixels: {len(valid_depths)}/{len(depths)}")
+                        # print(f"Frame {i}: Avg confidence: {valid_confs.mean():.3f}")
 
-                        # Optional: Save depth map as image
-                        if i % 10 == 0:  # Save every 10th frame
+                        if visualize_depth and (i % 10 == 0):  # Save every 10th frame
                             depth_normalized = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
                             depth_uint8 = (depth_normalized * 255).astype(np.uint8)
                             cv2.imwrite(f"depth_frame_{i:06d}.png", depth_uint8)
 
-                        
+            # Mast3r-SLAM relocation          
             elif mode == Mode.RELOC:
                 X, C = mast3r_inference_mono(model, frame)
                 frame.update_pointmap(X, C)
@@ -570,7 +564,7 @@ if __name__=='__main__':
             else:
                 raise Exception("Invalid mode")
 
-            # save pre frame results
+            # save per frame results
             if dataset.save_results:
                 save_dir, seq_name = eval.prepare_savedir(args, dataset)
                 traj_file = save_dir / f"{seq_name}_incremental_all.txt"
@@ -581,8 +575,31 @@ if __name__=='__main__':
                     f.write(f"{naive_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
                     # f.write(f"{t} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
             
+            # save key frame results
+            if add_new_kf:
+                keyframes.append(frame)
+                states.queue_global_optimization(len(keyframes) - 1)
 
-            ### --- Detection ---
+                if dataset.save_results:
+                    save_dir, seq_name = eval.prepare_savedir(args, dataset)
+                    traj_file = save_dir / f"{seq_name}_incremental_kf.txt"
+                    with open(traj_file, "a") as f:  # append
+                        t = dataset.timestamps[frame.frame_id]
+                        T_WC = as_SE3(frame.T_WC)
+                        x, y, z, qx, qy, qz, qw = T_WC.data.numpy().reshape(-1)
+                        if len(keyframes)==2:
+                            f.write("0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0\n") #TODO(yiwen) may need to make to first one to 1
+                        f.write(f"{naive_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
+
+                # In single threaded mode, wait for the backend to finish
+                while config["single_thread"]:
+                    with states.lock:
+                        if len(states.global_optimizer_tasks) == 0:
+                            break
+                    time.sleep(0.01)
+
+            ###### Camera Coordinate Human Mesh Recovery --> Only support single person for now ######
+            # --- Detect Bounding Boxes ---
             with torch.no_grad():
                 with autocast('cuda'):
                     det_out = detector(img_cv2)
@@ -593,7 +610,17 @@ if __name__=='__main__':
 
                     boxes = np.hstack([boxes, confs[:, None]])
                     boxes = arrange_boxes(boxes, mode='size', min_size=100)
-    
+
+            if boxes.shape[0]<1: # NOTE(yiwen) in emdb2 evaluation, boxes should come from gt annotations
+                # TODO(yiwen) if no boxes detected, skip the camera coord hmr
+                # record some missing hmr e.g. all zeros to npy/txt
+                continue
+
+            # TODO(yiwen) multiple persons 的时候还是需要一下tracking？否则会检测出来多个bounding boxes，confidence都足够高，这种情况下应该不能直接用bbox去筛选
+            # 或者用bbox center过滤一下
+            elif boxes.shape[0]>1: # when multiple person detected
+                boxes = boxes[0:1]
+
             this_img_file = imgfiles[i]
             if len(img_chunk)==0: # initialize, cache=2
                 img_chunk.append(imgfiles[i+2])
@@ -607,11 +634,18 @@ if __name__=='__main__':
             box_chunk.append(boxes)
             
             img_ck = np.array(img_chunk)
-            box_ck = np.array(box_chunk).reshape(-1, 5)
+
+            try:
+                box_ck = np.array(box_chunk).reshape(-1, 5)
+            except:
+                breakpoint()
+
+        
 
             frame_results, frame_feat_cache = camera_coord_HMR(hmr_model, img_ck, box_ck, frame_feat_cache)
 
-            print(f"cache length {frame_feat_cache['layers'][0]['mem_k'].shape[0]}")
+            # NOTE(yiwen) two frame cache, shape[1] = h*w*mem_t
+            # print(f"cache length {frame_feat_cache['layers'][0]['mem_k'].shape}")
 
             pred_cam.append(frame_results['pred_cam'])
             pred_pose.append(frame_results['pred_pose'])
@@ -649,7 +683,7 @@ if __name__=='__main__':
             pred_j3d_w = torch.einsum('bij,bnj->bni', current_camr, pred_j3d) + current_camt[:,None] # 1, 24, 3
             pred_ori_w = torch.einsum('bij,bjk->bik', current_camr, frame_results['pred_rotmat'][:,0]) # 1, 3, 3
 
-            if visualize_hcgif:
+            if visualize_hcgif and i%5==0: # save in 5 frames interval
                 cam_frame = load_camera_poses(current_camt[0], current_camq[0]) # o3d camera
                 mesh = trimesh.Trimesh(vertices=pred_vert_w[0], faces=smpls['neutral'].faces)
                 human_mesh = o3d.geometry.TriangleMesh()
@@ -659,22 +693,25 @@ if __name__=='__main__':
                 human_mesh.paint_uniform_color([0.8, 0.6, 0.6])
 
                 # NOTE(yiwen) if only keep the current, set all names to be the same
+                # render.scene.add_geometry(f"human", human_mesh, human_mat)
+                # render.scene.add_geometry(f"cam_frame", cam_frame, cam_mat)
                 render.scene.add_geometry(f"human{i}", human_mesh, human_mat)
                 render.scene.add_geometry(f"cam_frame{i}", cam_frame, cam_mat)
 
-                # Camera view setup
-                center = human_mesh.get_center()
-                up = [0, 1, 0]
-                view_radius = 3
-                eye0 = center + np.array([view_radius, view_radius, view_radius])
+                # (fix) Camera view setup
+                if not set_render_camera:
+                    center = human_mesh.get_center()
+                    view_radius = 3
+                    eye0 = center + np.array([view_radius, view_radius, view_radius])
+                    radius = np.linalg.norm(eye0 - center)
 
-                radius = np.linalg.norm(eye0 - center)
+                    # Yaw around the vertical (Y) axis, keeping camera above the object
+                    theta = np.deg2rad(angle)
+                    eye = center + radius * np.array([np.sin(theta), -0.2, np.cos(theta)])  # 0.2: small height above ground
+                    up = np.array([0, 1, 0])  # keep world Y up
+                    render.setup_camera(60, center, eye, up)
 
-                # Yaw around the vertical (Y) axis, keeping camera above the object
-                theta = np.deg2rad(angle)
-                eye = center + radius * np.array([np.sin(theta), -0.2, np.cos(theta)])  # 0.2: small height above ground
-                up = np.array([0, 1, 0])  # keep world Y up
-                render.setup_camera(60, center, eye, up)
+                    set_render_camera = True
 
                 img_o3d = render.render_to_image()
 
@@ -684,29 +721,6 @@ if __name__=='__main__':
                 img_np = np.fliplr(img_np)
                 imgs.append(img_np)
 
-
-            # save key frame results
-            if add_new_kf:
-                keyframes.append(frame)
-                states.queue_global_optimization(len(keyframes) - 1)
-
-                if dataset.save_results:
-                    save_dir, seq_name = eval.prepare_savedir(args, dataset)
-                    traj_file = save_dir / f"{seq_name}_incremental_kf.txt"
-                    with open(traj_file, "a") as f:  # append
-                        t = dataset.timestamps[frame.frame_id]
-                        T_WC = as_SE3(frame.T_WC)
-                        x, y, z, qx, qy, qz, qw = T_WC.data.numpy().reshape(-1)
-                        if len(keyframes)==2:
-                            f.write("0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0\n") #TODO(yiwen) may need to make to first one to 1
-                        f.write(f"{naive_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
-
-                # In single threaded mode, wait for the backend to finish
-                while config["single_thread"]:
-                    with states.lock:
-                        if len(states.global_optimizer_tasks) == 0:
-                            break
-                    time.sleep(0.01)
             # log time
             if i % 30 == 0:
                 FPS = i / (time.time() - fps_timer)
@@ -714,9 +728,6 @@ if __name__=='__main__':
             i += 1
 
             # TODO(yiwen) 这里其实应该每一帧去做多进程？然后.join()
-            # breakpoint()
-
-            # TODO(yiwen) add depth and world recons
 
         # Save gif
         imageio.mimsave(out_gif, imgs, fps=10)
@@ -725,19 +736,18 @@ if __name__=='__main__':
         breakpoint()
 
 
-        ### --- Save Global Results ---
+        ###### Save Global Results ######
+        # cam coord results of the whole sequence
         cam_coord_results = {'pred_cam': torch.cat(pred_cam),
                 'pred_pose': torch.cat(pred_pose),
                 'pred_shape': torch.cat(pred_shape),
                 'pred_rotmat': torch.cat(pred_rotmat),
                 'pred_trans': torch.cat(pred_trans)}
-        
 
-        # NOTE(yiwen) save the final results after global optimization
+        # the final cam pose and scene pc after global optimization
         if dataset.save_results:
             save_dir, seq_name = eval.prepare_savedir(args, dataset)
             eval.save_traj(save_dir, f"{seq_name}_globalOptimized_kf.txt", dataset.timestamps, keyframes)
-            # NOTE(yiwen) here we get the parameters from 
             eval.save_reconstruction(
                 save_dir,
                 f"{seq_name}.ply",
@@ -760,15 +770,9 @@ if __name__=='__main__':
         backend.join()
         if not args.no_viz:
             viz.join()
+        
         """
         camcoord_hmr.join()
         """
-
-        # TODO(yiwen) write a API, given img_folder and cam_int, probably modify from slam demo
-        # cam_R, cam_T = run_metric_slam(img_folder, masks=None, calib=cam_int)
-        # wd_cam_R, wd_cam_T, spec_f = align_cam_to_world(imgfiles[0], cam_R, cam_T)
-
-        # camera = {'pred_cam_R': cam_R.numpy(), 'pred_cam_T': cam_T.numpy(), 
-        #         'img_focal': cam_int[0], 'img_center': cam_int[2:]}
 
     
