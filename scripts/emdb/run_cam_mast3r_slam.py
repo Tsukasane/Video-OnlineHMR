@@ -48,6 +48,7 @@ from torch.amp import autocast
 from detectron2.config import LazyConfig
 
 """
+TODO(yiwen) check v100/h100 compile difference (yeah, cannot run on v100)
 python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz
 
 multiprocess: one frame in
@@ -501,28 +502,35 @@ if __name__=='__main__':
                     valid_depths = depths[valid_mask]
                     valid_confs = confidences[valid_mask]
 
-                    X_canon_world = T_WC.act(frame.X_canon)  # Transform to world coordinates     
-                    # Extract world coordinates
-                    X_world = X_canon_world[:, 0].cpu().numpy()  # X coordinates in world
-                    Y_world = X_canon_world[:, 1].cpu().numpy()  # Y coordinates in world  
-                    Z_world = X_canon_world[:, 2].cpu().numpy()  # Z coordinates in world
-                    
-                    # Calculate distances from world origin NOTE(yiwen) cam coord z only, world coord euclidean distance
-                    distances_world = np.sqrt(X_world**2 + Y_world**2 + Z_world**2)
-                    valid_distances = distances_world[valid_mask]
-                    
+                    X_canon_world = T_WC.act(frame.X_canon)  # Transform to world coordinates  
+
+                    if X_canon_world.max()==0: # relocation
+                        print(f"cannot update scaler at frame {i}")
+  
+                    else:
+                        # Extract world coordinates
+                        X_world = X_canon_world[:, 0].cpu().numpy()  # X coordinates in world
+                        Y_world = X_canon_world[:, 1].cpu().numpy()  # Y coordinates in world  
+                        Z_world = X_canon_world[:, 2].cpu().numpy()  # Z coordinates in world
+                        
+                        # Calculate distances from world origin NOTE(yiwen) cam coord z only, world coord euclidean distance
+                        distances_world = np.sqrt(X_world**2 + Y_world**2 + Z_world**2)
+                        valid_distances = distances_world[valid_mask]
+    
+                        naive_scaler = valid_distances.min() / valid_depths.min() # has a better accuracy in nearby points
                     """
                     slam depth * scale = pred depth
 
                     pred_cam_t = torch.tensor(traj[:, :3]) * scale
                     pred_cam_q = torch.tensor(traj[:, 3:])
                     """
-                    naive_scaler = valid_distances.min() / valid_depths.min() # has a better accuracy in nearby points
+                    
                     # if len(valid_distances) > 0:
                     #     print(f"Frame {i}: World distance range [{valid_distances.min():.3f}, {valid_distances.max():.3f}] meters")
                     #     print(f"Frame {i}: Camera pose - Translation: {T_WC.data[0, :3].cpu().numpy()}")
                     #     print(f"Frame {i}: Camera pose - Rotation: {T_WC.data[0, 3:].cpu().numpy()}")        
-                    
+                   
+
                     if len(valid_depths) > 0:
                         # print(f"Frame {i}: Depth range [{valid_depths.min():.3f}, {valid_depths.max():.3f}]")
                         # print(f"Frame {i}: Valid depth pixels: {len(valid_depths)}/{len(depths)}")
@@ -621,28 +629,33 @@ if __name__=='__main__':
             elif boxes.shape[0]>1: # when multiple person detected
                 boxes = boxes[0:1]
 
-            this_img_file = imgfiles[i]
-            if len(img_chunk)==0: # initialize, cache=2
-                img_chunk.append(imgfiles[i+2])
-                img_chunk.append(imgfiles[i+1])
-                box_chunk.append(boxes)
-                box_chunk.append(boxes)
-            elif len(img_chunk)>=3: # FIFO
-                img_chunk.pop(0)
-                box_chunk.pop(0)
-            img_chunk.append(this_img_file)
-            box_chunk.append(boxes)
-            
-            img_ck = np.array(img_chunk)
+            # this_img_file = imgfiles[i]
 
-            try:
-                box_ck = np.array(box_chunk).reshape(-1, 5)
-            except:
-                breakpoint()
+            # TODO(yiwen) change this to one frame at a time, and other store to cache
+            # if len(img_chunk)==0: # initialize, cache=2
+            #     img_chunk.append(imgfiles[i+2])
+            #     img_chunk.append(imgfiles[i+1])
+            #     box_chunk.append(boxes)
+            #     box_chunk.append(boxes)
+            # elif len(img_chunk)>=3: # FIFO
+            #     img_chunk.pop(0)
+            #     box_chunk.pop(0)
+            # img_chunk.append(this_img_file)
+            # box_chunk.append(boxes)
+            
+            img_ck = np.array([imgfiles[i]])
+            box_ck = np.array([boxes]).reshape(-1, 5)
+            
+            # img_ck = np.array(img_chunk)
+            # try:
+            #     box_ck = np.array(box_chunk).reshape(-1, 5)
+            # except:
+            #     breakpoint()
 
         
 
             frame_results, frame_feat_cache = camera_coord_HMR(hmr_model, img_ck, box_ck, frame_feat_cache)
+            # breakpoint()
 
             # NOTE(yiwen) two frame cache, shape[1] = h*w*mem_t
             # print(f"cache length {frame_feat_cache['layers'][0]['mem_k'].shape}")
@@ -701,7 +714,7 @@ if __name__=='__main__':
                 # (fix) Camera view setup
                 if not set_render_camera:
                     center = human_mesh.get_center()
-                    view_radius = 3
+                    view_radius = 8
                     eye0 = center + np.array([view_radius, view_radius, view_radius])
                     radius = np.linalg.norm(eye0 - center)
 

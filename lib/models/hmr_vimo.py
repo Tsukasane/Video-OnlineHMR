@@ -202,7 +202,7 @@ class HMR_VIMO(nn.Module):
 
         # patch level -->
         feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only
-        debug = True
+
         if not is_train: # in inference / validation
             inference_seqlen = feature.shape[1]
 
@@ -218,15 +218,15 @@ class HMR_VIMO(nn.Module):
                                                                                           t=t, 
                                                                                           device=device, 
                                                                                           cache=cache)
-    
-                pred_pose.append(smpl_pose.unsqueeze(1))
+
+                pred_pose.append(smpl_pose.unsqueeze(1)) # [([1, 144]),...]
                 pred_shape.append(smpl_shape.unsqueeze(1))
                 pred_cam.append(smpl_cam.unsqueeze(1))
 
             pred_pose = torch.cat(pred_pose, dim=1)
             pred_shape = torch.cat(pred_shape, dim=1)
             pred_cam = torch.cat(pred_cam, dim=1)
-            
+        
         else: # only for training pipeline debug
 
             #### add new
@@ -256,27 +256,30 @@ class HMR_VIMO(nn.Module):
         j3d_preds = []
         j2d_preds = []
 
-        # out = {}
-        # out['pred_cam'] = pred_cam # B*T, 3
-        # out['pred_pose'] = pred_pose # B*T, 144
-        # out['pred_shape'] = pred_shape # B*T, 10
-        # out['pred_rotmat'] = rot6d_to_rotmat(out['pred_pose']).reshape(-1, 24, 3, 3)
-        # out['pred_rotmat_0'] = pred_rotmat_0
-
         # s_out = self.smpl.query(out)
         # j3d = s_out.joints
     
-        out = {}
-        out['pred_cam'] = select_valid(pred_cam, batch_size) # B*T, 3
-        out['pred_pose'] = select_valid(pred_pose, batch_size) # B*T, 144
-        out['pred_shape'] = select_valid(pred_shape, batch_size) # B*T, 10
-        out['pred_rotmat'] = rot6d_to_rotmat(out['pred_pose']).reshape(-1, 24, 3, 3)
-        out['pred_rotmat_0'] = select_valid(pred_rotmat_0, batch_size)
-        
+        if is_train or is_valid:
+            out = {}
+            out['pred_cam'] = select_valid(pred_cam, batch_size) # B*T, 3
+            out['pred_pose'] = select_valid(pred_pose, batch_size) # B*T, 144
+            out['pred_shape'] = select_valid(pred_shape, batch_size) # B*T, 10
+            out['pred_rotmat'] = rot6d_to_rotmat(out['pred_pose']).reshape(-1, 24, 3, 3)
+            out['pred_rotmat_0'] = select_valid(pred_rotmat_0, batch_size)
+
+        else: # online inference with mast3r-slam
+            out = {}
+            out['pred_cam'] = pred_cam # B*T, 3
+            out['pred_pose'] = pred_pose # B*T, 144
+            out['pred_shape'] = pred_shape # B*T, 10
+            out['pred_rotmat'] = rot6d_to_rotmat(out['pred_pose']).reshape(-1, 24, 3, 3)
+            out['pred_rotmat_0'] = pred_rotmat_0
+
+        # breakpoint()
         s_out = self.smpl.query(out)
         j3d = s_out.joints
 
-        if debug:
+        if is_train or is_valid:
             # print(f"debug -- in valid")
             center = select_valid(center, batch_size)
             scale = select_valid(scale, batch_size)
@@ -300,8 +303,8 @@ class HMR_VIMO(nn.Module):
 
     def inference_chunk_ar(self, imgfiles, boxes, img_focal, img_center, device='cuda', cache=None): # for vis
         db = TrackDataset(imgfiles, boxes, img_focal=img_focal, 
-                        img_center=img_center, normalization=True, dilate=1.2)
-
+                        img_center=img_center, normalization=True, dilate=1.2) # it is better to collect batchsize=1
+        
         items = []
         for i in tqdm(range(len(db))):
             item = db[i] # dict

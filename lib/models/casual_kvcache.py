@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import einops
 
-from components.pose_transformer import TransformerDecoder
+from .components.pose_transformer import TransformerDecoder
 
 import numpy as np
 from skimage.util.shape import view_as_windows
