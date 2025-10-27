@@ -48,7 +48,8 @@ from torch.amp import autocast
 from detectron2.config import LazyConfig
 
 """
-TODO(yiwen) check v100/h100 compile difference (yeah, cannot run on v100)
+NOTE(yiwen) v100/h100 have compile difference (yeah, cannot run on v100)
+the render only work on robocluster h100 nodes(?)
 python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz
 
 multiprocess: one frame in
@@ -271,9 +272,17 @@ def load_camera_poses(cam_t, cam_q, scale=0.2, color_offset=0, gt=True):
         cam.colors = o3d.utility.Vector3dVector([single_color1[0]] * len(cam_lines))
     else:
         cam.colors = o3d.utility.Vector3dVector([single_color2[0]] * len(cam_lines))
-            # cam.colors = o3d.utility.Vector3dVector([rainbow_colors[(l_id + color_offset) % 20]] * len(cam_lines))
+        # incremental color along the time sequence
+        # cam.colors = o3d.utility.Vector3dVector([rainbow_colors[(l_id + color_offset) % 20]] * len(cam_lines))
 
     return cam
+
+def load_mogev2_model(device):
+    from moge.model.v2 import MoGeModel
+    mogev2_model = MoGeModel.from_pretrained("/ocean/projects/cis240055p/yzhao16/MoGe/pretrain/model.pt").to(device)                             
+
+    return mogev2_model
+
 
 
 if __name__=='__main__':
@@ -286,11 +295,12 @@ if __name__=='__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--split', type=int, default=2)
+    parser.add_argument("--save-as", default="default")
     parser.add_argument('--output_dir', type=str, default='results/emdb/camera')
     parser.add_argument("--config", default="configs/base.yaml")
-    parser.add_argument("--save-as", default="default")
+    parser.add_argument("--save_dir", default="./res_human_camera")
     parser.add_argument("--no-viz", action="store_true")
-    parser.add_argument("--calib", default="") # TODO(yiwen) add some of the configs to parser
+    parser.add_argument("--calib", type=bool) # TODO(yiwen) add some of the configs to parser
 
     args = parser.parse_args()
 
@@ -307,6 +317,7 @@ if __name__=='__main__':
     emdb = register_emdb(args) # dataset
     detector = init_detector(device) # ViTDet
     hmr_model = get_hmr_vimo(checkpoint='/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/results/online_videohmrv5_actionrate21_1/checkpoint_best.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
+    metric_depth_model = load_mogev2_model(device)
 
     # SMPL
     smpl = SMPL()
@@ -321,26 +332,32 @@ if __name__=='__main__':
         img_folder = f'{root}/images'
         imgfiles = sorted(glob(f'{root}/images/*.jpg'))
 
+        name_prefix = "_".join(root.split("/")[-2:])
+        out_gif = f"human_camera_{name_prefix}.gif"
+
         # lightweight dataset loading (read and sort images)
         img_h, img_w = cv2.imread(os.path.join(img_folder, "00000.jpg")).shape[:2]
         dataset = load_dataset(img_folder)
         dataset.subsample(config["dataset"]["subsample"]) # set to 1 by default
         rimg_h, rimg_w = dataset.get_img_shape()[0] # resized image and resized shape
         
-        # load annotations if eval on emdb2
-        annfile = f'{root}/{root.split("/")[-2]}_{root.split("/")[-1]}_data.pkl'
-        ann = pkl.load(open(annfile, 'rb'))
-        ext = ann['camera']['extrinsics']
-        intr = ann['camera']['intrinsics']
-        ann_boxes = ann['bboxes']['bboxes'] # (2009, 4) NOTE(yiwen) for emdb, boxes are given, if not, run detection
-
-        cam_int = [intr[0,0], intr[1,1], intr[0,2], intr[1,2]] 
-        img_focal = (intr[0,0] +  intr[1,1]) / 2.
-        img_center = intr[:2, 2]
+        if 'emdb' in root:
+            args.calib = True
        
-        if args.calib:
-            with open(args.calib, "r") as f:
-                intrinsics = yaml.load(f, Loader=yaml.SafeLoader)
+        if args.calib: # TODO(yiwen) add support of using calib
+            # load annotations if eval on emdb2
+            annfile = f'{root}/{root.split("/")[-2]}_{root.split("/")[-1]}_data.pkl'
+            ann = pkl.load(open(annfile, 'rb'))
+            ext = ann['camera']['extrinsics']
+            intr = ann['camera']['intrinsics']
+            ann_boxes = ann['bboxes']['bboxes'] # (2009, 4) NOTE(yiwen) for emdb, boxes are given, if not, run detection
+
+            cam_int = [intr[0,0], intr[1,1], intr[0,2], intr[1,2]] 
+            img_focal = (intr[0,0] +  intr[1,1]) / 2.
+            img_center = intr[:2, 2]
+
+            # register to mast3r-slam
+            intrinsics = intr # yaml.load(f, Loader=yaml.SafeLoader)
             config["use_calib"] = True
             dataset.use_calibration = True
             dataset.camera_intrinsics = Intrinsics.from_calib(
@@ -412,15 +429,13 @@ if __name__=='__main__':
         imgs = [] # for rendered images
         print(f"Start per frame processing")
 
+        # Offscreen renderer
         visualize_hcgif = True
         visualize_depth = False
-        # Offscreen renderer
         angle = 180
         w, h = 800, 600
-        out_gif = "human_camera.gif"
+        render_interval = 5
         render = o3d.visualization.rendering.OffscreenRenderer(w, h)
-
-        # Background black
         render.scene.set_background([0, 0, 0, 1])
         set_render_camera = False # render cam (the third viewpoint)
 
@@ -432,7 +447,7 @@ if __name__=='__main__':
         
         # start looping the video seq
         while True:
-            if i>=200: # TODO(yiwen) debug
+            if i>=50: # TODO(yiwen) debug
                 break
 
             ###### Camera Pose SLAM --> output Cam_R, Cam_T, also camera coordinates absolute depth (then convert to world depth) ######
@@ -502,8 +517,11 @@ if __name__=='__main__':
                     valid_depths = depths[valid_mask]
                     valid_confs = confidences[valid_mask]
 
-                    X_canon_world = T_WC.act(frame.X_canon)  # Transform to world coordinates  
+                    # metric scale depth(?)
+                    depth_input_img = torch.tensor(img).permute(2, 0, 1) # 3, 960, 720
+                    metric_depth = metric_depth_model.infer(depth_input_img)["depth"]
 
+                    X_canon_world = T_WC.act(frame.X_canon)  # Transform to world coordinates  
                     if X_canon_world.max()==0: # relocation
                         print(f"cannot update scaler at frame {i}")
   
@@ -516,8 +534,13 @@ if __name__=='__main__':
                         # Calculate distances from world origin NOTE(yiwen) cam coord z only, world coord euclidean distance
                         distances_world = np.sqrt(X_world**2 + Y_world**2 + Z_world**2)
                         valid_distances = distances_world[valid_mask]
-    
-                        naive_scaler = valid_distances.min() / valid_depths.min() # has a better accuracy in nearby points
+
+                        # print(f"debug -- valid_distances min max {valid_distances.min()} {valid_distances.max()}")
+                        # print(f'debug -- metric depth min max {metric_depth.min()} {metric_depth.max()}')
+
+                        # naive_scaler = valid_distances.min() / valid_depths.min() # has a better accuracy in nearby points
+                    
+                    naive_scaler = metric_depth.min() / valid_depths.min() # TODO(yiwen) latter has large difference
                     """
                     slam depth * scale = pred depth
 
@@ -608,40 +631,33 @@ if __name__=='__main__':
 
             ###### Camera Coordinate Human Mesh Recovery --> Only support single person for now ######
             # --- Detect Bounding Boxes ---
-            with torch.no_grad():
-                with autocast('cuda'):
-                    det_out = detector(img_cv2)
-                    det_instances = det_out['instances']
-                    valid_idx = (det_instances.pred_classes==0) & (det_instances.scores > 0.5)
-                    boxes = det_instances.pred_boxes.tensor[valid_idx].cpu().numpy()
-                    confs = det_instances.scores[valid_idx].cpu().numpy()
+            if 'emdb' in root: # NOTE(yiwen) for emdb, boxes are given
+                boxes = ann_boxes[i] # x1,y1,x2,y2
+                boxes = np.array(boxes).reshape(1,4)
+                confs = np.array([1.0]).reshape(1,1)
+                boxes = np.hstack([boxes, confs]) # x1,y1,x2,y2,conf
+                boxes = arrange_boxes(boxes, mode='size', min_size=100)
+            else:
+                with torch.no_grad():
+                    with autocast('cuda'):
+                        det_out = detector(img_cv2)
+                        det_instances = det_out['instances']
+                        valid_idx = (det_instances.pred_classes==0) & (det_instances.scores > 0.5)
+                        boxes = det_instances.pred_boxes.tensor[valid_idx].cpu().numpy()
+                        confs = det_instances.scores[valid_idx].cpu().numpy()
 
-                    boxes = np.hstack([boxes, confs[:, None]])
-                    boxes = arrange_boxes(boxes, mode='size', min_size=100)
+                        boxes = np.hstack([boxes, confs[:, None]])
+                        boxes = arrange_boxes(boxes, mode='size', min_size=100)
 
-            if boxes.shape[0]<1: # NOTE(yiwen) in emdb2 evaluation, boxes should come from gt annotations
-                # TODO(yiwen) if no boxes detected, skip the camera coord hmr
-                # record some missing hmr e.g. all zeros to npy/txt
-                continue
+                if boxes.shape[0]<1: # NOTE(yiwen) in emdb2 evaluation, boxes should come from gt annotations
+                    # TODO(yiwen) if no boxes detected, skip the camera coord hmr
+                    # record some missing hmr e.g. all zeros to npy/txt
+                    continue
 
-            # TODO(yiwen) multiple persons 的时候还是需要一下tracking？否则会检测出来多个bounding boxes，confidence都足够高，这种情况下应该不能直接用bbox去筛选
-            # 或者用bbox center过滤一下
-            elif boxes.shape[0]>1: # when multiple person detected
-                boxes = boxes[0:1]
-
-            # this_img_file = imgfiles[i]
-
-            # TODO(yiwen) change this to one frame at a time, and other store to cache
-            # if len(img_chunk)==0: # initialize, cache=2
-            #     img_chunk.append(imgfiles[i+2])
-            #     img_chunk.append(imgfiles[i+1])
-            #     box_chunk.append(boxes)
-            #     box_chunk.append(boxes)
-            # elif len(img_chunk)>=3: # FIFO
-            #     img_chunk.pop(0)
-            #     box_chunk.pop(0)
-            # img_chunk.append(this_img_file)
-            # box_chunk.append(boxes)
+                # TODO(yiwen) multiple persons 的时候还是需要一下tracking？否则会检测出来多个bounding boxes，confidence都足够高，这种情况下应该不能直接用bbox去筛选
+                # 或者用bbox center过滤一下
+                elif boxes.shape[0]>1: # when multiple person detected
+                    boxes = boxes[0:1]
             
             img_ck = np.array([imgfiles[i]])
             box_ck = np.array([boxes]).reshape(-1, 5)
@@ -652,11 +668,8 @@ if __name__=='__main__':
             # except:
             #     breakpoint()
 
-        
-
             frame_results, frame_feat_cache = camera_coord_HMR(hmr_model, img_ck, box_ck, frame_feat_cache)
-            # breakpoint()
-
+            
             # NOTE(yiwen) two frame cache, shape[1] = h*w*mem_t
             # print(f"cache length {frame_feat_cache['layers'][0]['mem_k'].shape}")
 
@@ -693,10 +706,11 @@ if __name__=='__main__':
 
             # world coords human mesh
             pred_vert_w = torch.einsum('bij,bnj->bni', current_camr, pred_vert) + current_camt[:,None] # 1, 6890, 3
-            pred_j3d_w = torch.einsum('bij,bnj->bni', current_camr, pred_j3d) + current_camt[:,None] # 1, 24, 3
+            pred_j3d_w = torch.einsum('bij,bnj->bni', current_camr, pred_j3d) + current_camt[:,None] # 1, 24, 3 -- pose
             pred_ori_w = torch.einsum('bij,bjk->bik', current_camr, frame_results['pred_rotmat'][:,0]) # 1, 3, 3
 
-            if visualize_hcgif and i%5==0: # save in 5 frames interval
+            # save in 5 frames interval
+            if visualize_hcgif and i % render_interval == 0:
                 cam_frame = load_camera_poses(current_camt[0], current_camq[0]) # o3d camera
                 mesh = trimesh.Trimesh(vertices=pred_vert_w[0], faces=smpls['neutral'].faces)
                 human_mesh = o3d.geometry.TriangleMesh()
@@ -723,9 +737,7 @@ if __name__=='__main__':
                     eye = center + radius * np.array([np.sin(theta), -0.2, np.cos(theta)])  # 0.2: small height above ground
                     up = np.array([0, 1, 0])  # keep world Y up
                     render.setup_camera(60, center, eye, up)
-
                     set_render_camera = True
-
                 img_o3d = render.render_to_image()
 
                 # flip vertically for correct image orientation
@@ -734,7 +746,7 @@ if __name__=='__main__':
                 img_np = np.fliplr(img_np)
                 imgs.append(img_np)
 
-            # log time
+            # print FPS per 30 frames
             if i % 30 == 0:
                 FPS = i / (time.time() - fps_timer)
                 print(f"FPS: {FPS}")
@@ -743,41 +755,46 @@ if __name__=='__main__':
             # TODO(yiwen) 这里其实应该每一帧去做多进程？然后.join()
 
         # Save gif
-        imageio.mimsave(out_gif, imgs, fps=10)
-        print(f"✅ Saved gif to {out_gif}")
+        if visualize_hcgif:
+            imageio.mimsave(out_gif, imgs, fps=10)
+            print(f"✅ Saved gif to {out_gif}")
 
-        breakpoint()
-
-
+        
         ###### Save Global Results ######
-        # cam coord results of the whole sequence
+        # cam coord results of the whole sequence, for eval
+        os.makedirs(args.save_dir, exist_ok=True)
         cam_coord_results = {'pred_cam': torch.cat(pred_cam),
                 'pred_pose': torch.cat(pred_pose),
                 'pred_shape': torch.cat(pred_shape),
                 'pred_rotmat': torch.cat(pred_rotmat),
                 'pred_trans': torch.cat(pred_trans)}
+        np.savez(f'{args.save_dir}/{name_prefix}.npz', **cam_coord_results)
+    
+        breakpoint()
 
         # the final cam pose and scene pc after global optimization
         if dataset.save_results:
             save_dir, seq_name = eval.prepare_savedir(args, dataset)
-            eval.save_traj(save_dir, f"{seq_name}_globalOptimized_kf.txt", dataset.timestamps, keyframes)
+            cam_savedir = os.path.join(args.save_dir, "campose")
+            os.makedirs(cam_savedir, exist_ok=True)
+            eval.save_traj(cam_savedir, f"{seq_name}_globalOptimized_kf.txt", dataset.timestamps, keyframes)
             eval.save_reconstruction(
-                save_dir,
+                cam_savedir,
                 f"{seq_name}.ply",
                 keyframes,
                 last_msg.C_conf_threshold,
             )
             eval.save_keyframes(
-                save_dir / "keyframes" / seq_name, dataset.timestamps, keyframes
+                cam_savedir / "keyframes" / seq_name, dataset.timestamps, keyframes
             )
-
+        # the keyframe images
         if save_frames:
-            savedir = pathlib.Path(f"logs/frames/{datetime_now}")
-            savedir.mkdir(exist_ok=True, parents=True)
+            kf_savedir = os.path.join(args.save_dir, "keyframes")
+            os.makedirs(kf_savedir, exist_ok=True)
             for i, frame in tqdm.tqdm(enumerate(frames), total=len(frames)):
                 frame = (frame * 255).clip(0, 255)
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                cv2.imwrite(f"{savedir}/{i}.png", frame)
+                cv2.imwrite(f"{kf_savedir}/{i}.png", frame)
 
         print("done")
         backend.join()

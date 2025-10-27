@@ -76,6 +76,14 @@ bash scripts/emdb/run.sh
 python scripts/emdb/run_cam.py --split 2 --output_dir "results/emdb/camera"
 python scripts/emdb/run_smpl.py --split 2 --output_dir "results/emdb/smpl"
 python scripts/emdb/run_eval.py --split 2 --input_dir "results/emdb"
+
+# for mast3r-slam evaluation
+# world coords HMR
+python scripts/emdb/run_eval_mast3r_slam.py --split 2 --input_dir ./res_human_camera
+# cam traj eval
+python /ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/scripts/emdb/cam_only_eval.py
+# online inference (emdb2)
+python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz
 ```
 
 **Metrics**
