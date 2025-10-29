@@ -82,8 +82,8 @@ python scripts/emdb/run_eval.py --split 2 --input_dir "results/emdb"
 python scripts/emdb/run_eval_mast3r_slam.py --split 2 --input_dir ./res_human_camera
 # cam traj eval
 python /ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/scripts/emdb/cam_only_eval.py
-# online inference (emdb2)
-python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz
+# online inference (set --calib true on emdb2)
+python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true
 ```
 
 **Metrics**

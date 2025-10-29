@@ -18,6 +18,7 @@ import tqdm
 import yaml
 import trimesh
 import imageio
+import signal
 from mast3r_slam.global_opt import FactorGraph
 
 from mast3r_slam.config import load_config, config, set_global_config
@@ -50,7 +51,7 @@ from detectron2.config import LazyConfig
 """
 NOTE(yiwen) v100/h100 have compile difference (yeah, cannot run on v100)
 the render only work on robocluster h100 nodes(?)
-python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz
+python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true
 
 multiprocess: one frame in
 slam-frontend 
@@ -187,8 +188,8 @@ def register_emdb(args):
     # EMDB dataset and splits
     roots = []
     for p in range(10):
-        if p>1: #NOTE(yiwen) debug
-            break
+        # if p>1: #NOTE(yiwen) debug
+        #     break
         folder = f'/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/datasets/emdb/EMDB/P{p}'
         root = sorted(glob(f'{folder}/*'))
         roots.extend(root)
@@ -201,6 +202,11 @@ def register_emdb(args):
         if ann[f'emdb{spl}']:
             emdb.append(root)
 
+    
+    # TODO(yiwen) temp
+
+    # breakpoint()
+    # emdb = ['/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/datasets/emdb/EMDB/P2/24_outdoor_long_walk']
     return emdb
 
 
@@ -310,10 +316,6 @@ if __name__=='__main__':
     savefolder = args.output_dir
     os.makedirs(savefolder, exist_ok=True)
 
-    manager = mp.Manager()
-    main2viz = new_queue(manager, args.no_viz)
-    viz2main = new_queue(manager, args.no_viz)
-
     emdb = register_emdb(args) # dataset
     detector = init_detector(device) # ViTDet
     hmr_model = get_hmr_vimo(checkpoint='/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/results/online_videohmrv5_actionrate21_1/checkpoint_best.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
@@ -325,6 +327,9 @@ if __name__=='__main__':
 
     # Estimate camera motion on EMDB (subset: spl)
     for root in emdb:
+        manager = mp.Manager()
+        main2viz = new_queue(manager, args.no_viz)
+        viz2main = new_queue(manager, args.no_viz)
         print(f'Running on {root}...')
 
         print(f"Split video to frames and register camera calibration")
@@ -430,7 +435,7 @@ if __name__=='__main__':
         print(f"Start per frame processing")
 
         # Offscreen renderer
-        visualize_hcgif = True
+        visualize_hcgif = False
         visualize_depth = False
         angle = 180
         w, h = 800, 600
@@ -447,8 +452,9 @@ if __name__=='__main__':
         
         # start looping the video seq
         while True:
-            if i>=50: # TODO(yiwen) debug
-                break
+            # if i>=50: # TODO(yiwen) debug
+            #     states.set_mode(Mode.TERMINATED)
+            #     break
 
             ###### Camera Pose SLAM --> output Cam_R, Cam_T, also camera coordinates absolute depth (then convert to world depth) ######
             mode = states.get_mode()
@@ -522,6 +528,8 @@ if __name__=='__main__':
                     metric_depth = metric_depth_model.infer(depth_input_img)["depth"]
 
                     X_canon_world = T_WC.act(frame.X_canon)  # Transform to world coordinates  
+                    
+                    # TODO(yiwen) delate this
                     if X_canon_world.max()==0: # relocation
                         print(f"cannot update scaler at frame {i}")
   
@@ -598,7 +606,7 @@ if __name__=='__main__':
             # save per frame results
             if dataset.save_results:
                 save_dir, seq_name = eval.prepare_savedir(args, dataset)
-                traj_file = save_dir / f"{seq_name}_incremental_all.txt"
+                traj_file = save_dir / f"{name_prefix}_{seq_name}_incremental_all.txt"
                 with open(traj_file, "a") as f:  # append
                     t = dataset.timestamps[frame.frame_id]
                     T_WC = as_SE3(frame.T_WC)
@@ -613,7 +621,7 @@ if __name__=='__main__':
 
                 if dataset.save_results:
                     save_dir, seq_name = eval.prepare_savedir(args, dataset)
-                    traj_file = save_dir / f"{seq_name}_incremental_kf.txt"
+                    traj_file = save_dir / f"{name_prefix}_{seq_name}_incremental_kf.txt"
                     with open(traj_file, "a") as f:  # append
                         t = dataset.timestamps[frame.frame_id]
                         T_WC = as_SE3(frame.T_WC)
@@ -709,7 +717,7 @@ if __name__=='__main__':
             pred_j3d_w = torch.einsum('bij,bnj->bni', current_camr, pred_j3d) + current_camt[:,None] # 1, 24, 3 -- pose
             pred_ori_w = torch.einsum('bij,bjk->bik', current_camr, frame_results['pred_rotmat'][:,0]) # 1, 3, 3
 
-            # save in 5 frames interval
+            # visualize human-camera gif
             if visualize_hcgif and i % render_interval == 0:
                 cam_frame = load_camera_poses(current_camt[0], current_camq[0]) # o3d camera
                 mesh = trimesh.Trimesh(vertices=pred_vert_w[0], faces=smpls['neutral'].faces)
@@ -769,37 +777,88 @@ if __name__=='__main__':
                 'pred_rotmat': torch.cat(pred_rotmat),
                 'pred_trans': torch.cat(pred_trans)}
         np.savez(f'{args.save_dir}/{name_prefix}.npz', **cam_coord_results)
-    
-        breakpoint()
 
         # the final cam pose and scene pc after global optimization
-        if dataset.save_results:
-            save_dir, seq_name = eval.prepare_savedir(args, dataset)
-            cam_savedir = os.path.join(args.save_dir, "campose")
-            os.makedirs(cam_savedir, exist_ok=True)
-            eval.save_traj(cam_savedir, f"{seq_name}_globalOptimized_kf.txt", dataset.timestamps, keyframes)
-            eval.save_reconstruction(
-                cam_savedir,
-                f"{seq_name}.ply",
-                keyframes,
-                last_msg.C_conf_threshold,
-            )
-            eval.save_keyframes(
-                cam_savedir / "keyframes" / seq_name, dataset.timestamps, keyframes
-            )
-        # the keyframe images
-        if save_frames:
-            kf_savedir = os.path.join(args.save_dir, "keyframes")
-            os.makedirs(kf_savedir, exist_ok=True)
-            for i, frame in tqdm.tqdm(enumerate(frames), total=len(frames)):
-                frame = (frame * 255).clip(0, 255)
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                cv2.imwrite(f"{kf_savedir}/{i}.png", frame)
+        # if dataset.save_results:
+        #     save_dir, seq_name = eval.prepare_savedir(args, dataset)
+        #     cam_savedir = os.path.join(args.save_dir, "campose")
+        #     os.makedirs(cam_savedir, exist_ok=True)
+        #     eval.save_traj(cam_savedir, f"{name_prefix}_{seq_name}_globalOptimized_kf.txt", dataset.timestamps, keyframes)
+        #     eval.save_reconstruction(
+        #         cam_savedir,
+        #         f"{name_prefix}_{seq_name}.ply",
+        #         keyframes,
+        #         last_msg.C_conf_threshold,
+        #     )
+        #     eval.save_keyframes(
+        #         cam_savedir / "keyframes" / seq_name, dataset.timestamps, keyframes
+        #     )
+        # # the keyframe images
+        # if save_frames:
+        #     kf_savedir = os.path.join(args.save_dir, "keyframes")
+        #     print(f"saving frames to {kf_savedir}...")
+        #     os.makedirs(kf_savedir, exist_ok=True)
+        #     for i, frame in tqdm.tqdm(enumerate(frames), total=len(frames)):
+        #         frame = (frame * 255).clip(0, 255)
+        #         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        #         cv2.imwrite(f"{kf_savedir}/{i}.png", frame)
 
         print("done")
-        backend.join()
+        
+        # Send termination signal to viz
         if not args.no_viz:
-            viz.join()
+            try:
+                main2viz.put(WindowMsg(is_terminated=True), timeout=1)
+            except:
+                pass
+        
+        # Wait for processes to finish with timeout
+        print("Waiting for backend to finish...")
+        timeout = 30
+        start_time = time.time()
+        
+        while backend.is_alive() and (time.time() - start_time) < timeout:
+            time.sleep(0.1)
+        
+        if backend.is_alive():
+            print("Warning: Backend did not finish, terminating...")
+            backend.terminate()
+            backend.join()
+        else:
+            backend.join()
+            print("Backend joined")
+        
+        if not args.no_viz:
+            print("Waiting for visualization to finish...")
+            start_time = time.time()
+            while viz.is_alive() and (time.time() - start_time) < timeout:
+                time.sleep(0.1)
+            
+            if viz.is_alive():
+                print("Warning: Visualization did not finish, terminating...")
+                viz.terminate()
+                viz.join()
+            else:
+                viz.join()
+                print("Visualization joined")
+        
+        # Clean up resources
+        print("Cleaning up resources...")
+        del tracker
+        del keyframes
+        del states
+        if not args.no_viz:
+            del main2viz
+            del viz2main
+        del manager
+        
+        # Clear CUDA cache to avoid memory issues
+        torch.cuda.empty_cache()
+        
+        # Clean up Open3D renderer
+        del render
+        
+        print(f"Sequence {root} completed and cleaned up")
         
         """
         camcoord_hmr.join()

@@ -30,8 +30,6 @@ input_dir = args.input_dir
 # EMDB dataset and splits
 roots = []
 for p in range(10):
-    if p>1: #NOTE(yiwen) debug
-        break
     folder = f'/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/datasets/emdb/EMDB/P{p}'
     root = sorted(glob(f'{folder}/*'))
     roots.extend(root)
@@ -109,18 +107,20 @@ for root in tqdm(emdb):
     pred_j3d = pred.joints[:, :24]
 
     cam_prefix = "_".join(seq.split("_")[:2])
-    cam_root = f"/ocean/projects/cis240055p/yzhao16/MASt3R-SLAM/logs/{cam_prefix}_incremental_all.txt"
+    cam_root = f"/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/logs/{seq}_images_incremental_all.txt"
+
     with open(cam_root, "r") as f:
         lines = f.readlines()
 
     pred_camt_ls = []
     pred_camr_ls = []
-    naive_scaler = 1.5
+    naive_scaler = 1.0
+    scaler_cnt = 0
 
     for l_id, line in enumerate(lines):
         # print(f"debug -- l_id {l_id}")
         vals = list(map(float, line.strip().split()))
-        timestep = vals[0]
+        scaler_cnt += vals[0]
         tx, ty, tz = vals[1:4]
         qx, qy, qz, qw = vals[4:]
         wxyz = [qw, qx, qy, qz] # to wxyz
@@ -132,6 +132,10 @@ for root in tqdm(emdb):
         pred_camt_ls.append(current_camt)
         pred_camr_ls.append(current_camr)
     
+    scaler_cnt /= len(lines)
+
+    print(f"debug -- scaler_cnt: {scaler_cnt}")
+    # pred_camt = scaler_cnt * torch.stack(pred_camt_ls).squeeze(1) # T, 3
     pred_camt = torch.stack(pred_camt_ls).squeeze(1) # T, 3
     pred_camr = torch.stack(pred_camr_ls).squeeze(1) # T, 3, 3
 

@@ -1,7 +1,11 @@
 #!/bin/bash
-#SBATCH -p GPU-shared
-#SBATCH --gres=gpu:h100-80:1
+#SBATCH -p ROBO
+#SBATCH -A cis240055p
+#SBATCH -N 1 
+#SBATCH -n 4
+#SBATCH --gres=gpu:1
 #SBATCH -t 2-00:00:00
+
 
 # export HF_HOME=/ocean/projects/cis240055p/yzhao16/hub_model
 # export DF_CACHE_DIR=/ocean/projects/cis240055p/yzhao16/hub_model

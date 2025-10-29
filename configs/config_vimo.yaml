@@ -28,8 +28,6 @@ TRAIN:
   MULTI_LR: True
   LR: 1e-5
   LR2: 1e-4 # NOTE(yiwen) this is for st module
-  # LR_SCHEDULE: [1,2,3]
-  # LR_DECAY: 0.3
   WARMUP_STEPS: 3000
   SUMMARY_STEP: 50
   VALID_STEP: 150
@@ -57,7 +55,7 @@ MODEL:
   VALID_RANGE: (0,2)
 
 
-EXP_NAME: 'online_videohmrv5_actionrate21_lr1e-4_1' # onlineTRAM_sequence online_videohmrv5_actionrate12
+EXP_NAME: 'online_videohmrv5_actionrate21_lr1e-4_new' # onlineTRAM_sequence online_videohmrv5_actionrate12
 COMMENT:
   'Default configs.'
 

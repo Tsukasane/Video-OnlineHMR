@@ -15,7 +15,6 @@ from lib.camera.slam_utils import eval_slam
 
 """
 python /ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/scripts/emdb/cam_only_eval.py
-
 """
 
 parser = argparse.ArgumentParser()
@@ -29,7 +28,7 @@ slam_method = "mast3r_slam"
 # EMDB dataset and splits
 roots = []
 for p in range(10):
-    folder = f'/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/datasets/emdb/EMDB/P{p}'
+    folder = f'./datasets/emdb/EMDB/P{p}'
     root = sorted(glob(f'{folder}/*'))
     roots.extend(root)
 
@@ -40,8 +39,6 @@ for root in roots:
     ann = pkl.load(open(annfile, 'rb'))
     if ann[f'emdb{spl}']:
         emdb.append(root)
-
-
 
 # Evaluation: Camera motion
 results = {}
@@ -68,10 +65,10 @@ for root in emdb:
         pred_camq = matrix_to_quaternion(pred_camr)
     
     elif slam_method=="mast3r_slam":
-        root_dir = "/ocean/projects/cis240055p/yzhao16/MASt3R-SLAM/logs"
-        scene_name = f"{root.split('/')[-2]}_{root.split('/')[-1].split('_')[0]}" # P0_09
+        root_dir = "./logs"
+        scene_name = "_".join(root.split('/')[-2:]) # P0_09
         
-        txt_file = os.path.join(root_dir, f"{scene_name}_incremental_all.txt")
+        txt_file = os.path.join(root_dir, f"{scene_name}_images_incremental_all.txt")
         
         with open(txt_file, "r") as f:
             lines = f.readlines()
