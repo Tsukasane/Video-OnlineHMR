@@ -17,10 +17,10 @@ from lib.vis.traj import *
 from lib.camera.slam_utils import eval_slam
 
 """
-FIXME(yiwen): currently only works wham env
-python scripts/emdb/run_eval_mast3r_slam.py --split 2 --input_dir ./res_human_camera
+python scripts/emdb/run_eval_mast3r_slam.py --split 2 --input_dir ./to_daniel/human
 """
 
+failed_seqs = []
 parser = argparse.ArgumentParser()
 parser.add_argument('--split', type=int, default=2)
 parser.add_argument('--input_dir', type=str, default='results/emdb')
@@ -30,7 +30,7 @@ input_dir = args.input_dir
 # EMDB dataset and splits
 roots = []
 for p in range(10):
-    folder = f'/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/datasets/emdb/EMDB/P{p}'
+    folder = f'./datasets/emdb/EMDB/P{p}'
     root = sorted(glob(f'{folder}/*'))
     roots.extend(root)
 
@@ -41,6 +41,14 @@ for root in roots:
     ann = pkl.load(open(annfile, 'rb'))
     if ann[f'emdb{spl}']:
         emdb.append(root)
+
+# emdb = emdb[:18]
+# breakpoint()
+failed_cnt = 0
+for f in failed_seqs:
+    emdb.pop(f-failed_cnt)
+    failed_cnt += 1
+
 
 # SMPL
 smpl = SMPL()
@@ -107,16 +115,24 @@ for root in tqdm(emdb):
     pred_j3d = pred.joints[:, :24]
 
     cam_prefix = "_".join(seq.split("_")[:2])
-    cam_root = f"/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/logs/{seq}_images_incremental_all.txt"
+    cam_root = f"./to_daniel/camera/{seq}_images_incremental_all.txt"
 
     with open(cam_root, "r") as f:
         lines = f.readlines()
 
     pred_camt_ls = []
     pred_camr_ls = []
-    naive_scaler = 1.0
+    depth_frame_register = 2
+    if depth_frame_register:
+        naive_scaler = 0.0
+        for fm in range(depth_frame_register):
+            naive_scaler += list(map(float, lines[fm].strip().split()))[0]
+        naive_scaler /= depth_frame_register
+    else:
+        naive_scaler = 1.0
     scaler_cnt = 0
 
+    print(f"debug -- naive_scaler: {naive_scaler}")
     for l_id, line in enumerate(lines):
         # print(f"debug -- l_id {l_id}")
         vals = list(map(float, line.strip().split()))

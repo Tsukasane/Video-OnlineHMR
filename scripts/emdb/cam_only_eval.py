@@ -14,7 +14,7 @@ from lib.vis.traj import *
 from lib.camera.slam_utils import eval_slam
 
 """
-python /ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/scripts/emdb/cam_only_eval.py
+python /ocean/projects/cis210027p/yzhao16/Video-OnlineHMR/scripts/emdb/cam_only_eval.py
 """
 
 parser = argparse.ArgumentParser()
@@ -40,6 +40,7 @@ for root in roots:
     if ann[f'emdb{spl}']:
         emdb.append(root)
 
+# emdb = emdb[:18]
 # Evaluation: Camera motion
 results = {}
 for root in emdb:
@@ -65,7 +66,7 @@ for root in emdb:
         pred_camq = matrix_to_quaternion(pred_camr)
     
     elif slam_method=="mast3r_slam":
-        root_dir = "./logs"
+        root_dir = "./to_daniel/camera"
         scene_name = "_".join(root.split('/')[-2:]) # P0_09
         
         txt_file = os.path.join(root_dir, f"{scene_name}_images_incremental_all.txt")

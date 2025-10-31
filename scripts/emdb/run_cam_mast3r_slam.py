@@ -47,10 +47,10 @@ from lib.vis.traj import *
 
 from torch.amp import autocast
 from detectron2.config import LazyConfig
+from segment_anything import SamPredictor, sam_model_registry
 
 """
 NOTE(yiwen) v100/h100 have compile difference (yeah, cannot run on v100)
-the render only work on robocluster h100 nodes(?)
 python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true
 
 multiprocess: one frame in
@@ -202,11 +202,7 @@ def register_emdb(args):
         if ann[f'emdb{spl}']:
             emdb.append(root)
 
-    
-    # TODO(yiwen) temp
-
-    # breakpoint()
-    # emdb = ['/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/datasets/emdb/EMDB/P2/24_outdoor_long_walk']
+    emdb = emdb[18:]
     return emdb
 
 
@@ -218,6 +214,13 @@ def init_detector(device):
         detectron2_cfg.model.roi_heads.box_predictors[i].test_score_thresh = 0.25
     detector = DefaultPredictor_Lazy(detectron2_cfg)
     return detector
+
+
+def init_sam(device):
+    sam = sam_model_registry["vit_h"](checkpoint="data/pretrain/sam_vit_h_4b8939.pth")
+    _ = sam.to(device)
+    predictor = SamPredictor(sam)
+    return predictor
 
 
 def bbox_est(center, scale, img_focal, img_center):
@@ -318,7 +321,8 @@ if __name__=='__main__':
 
     emdb = register_emdb(args) # dataset
     detector = init_detector(device) # ViTDet
-    hmr_model = get_hmr_vimo(checkpoint='/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/results/online_videohmrv5_actionrate21_1/checkpoint_best.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
+    sam_predictor = init_sam(device) # SAM for human mask
+    hmr_model = get_hmr_vimo(checkpoint='/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/results/online_videohmrv5_actionrate21_lr1e-4_1/checkpoint_best.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
     metric_depth_model = load_mogev2_model(device)
 
     # SMPL
@@ -476,6 +480,35 @@ if __name__=='__main__':
             timestamp, img = dataset[i] # the original size, 0-1 scale
             img_cv2 = dataset.read_img(i) # the original size, 0-255 scale
 
+            # --- Build human mask with SAM (using GT boxes on EMDB or detector otherwise) ---
+            boxes_np = None
+            if 'emdb' in root and args.calib:
+                boxes_np = np.array(ann_boxes[i]).reshape(-1, 4)
+            else:
+                with torch.no_grad():
+                    with autocast('cuda'):
+                        det_out = detector(img_cv2)
+                        det_instances = det_out['instances']
+                        valid_idx = (det_instances.pred_classes==0) & (det_instances.scores > 0.5)
+                        boxes_np = det_instances.pred_boxes.tensor[valid_idx].cpu().numpy()
+
+            if boxes_np is not None and boxes_np.shape[0] > 0:
+                with autocast('cuda'):
+                    sam_predictor.set_image(img_cv2, image_format='BGR')
+                    bb = torch.tensor(boxes_np[:, :4]).to(device)
+                    bb = sam_predictor.transform.apply_boxes_torch(bb, img_cv2.shape[:2])
+                    masks, scores, _ = sam_predictor.predict_torch(
+                        point_coords=None,
+                        point_labels=None,
+                        boxes=bb,
+                        multimask_output=False
+                    )
+                masks = masks.detach().cpu().squeeze(1)  # (N, H, W)
+                human_mask = (masks.sum(dim=0) > 0).numpy()  # (H, W) bool
+                if human_mask.any():
+                    # img is float [0,1], HxWx3; zero-out human regions
+                    img[human_mask] = 0.0
+
             if save_frames:
                 frames.append(img)
 
@@ -527,26 +560,26 @@ if __name__=='__main__':
                     depth_input_img = torch.tensor(img).permute(2, 0, 1) # 3, 960, 720
                     metric_depth = metric_depth_model.infer(depth_input_img)["depth"]
 
-                    X_canon_world = T_WC.act(frame.X_canon)  # Transform to world coordinates  
+                    # X_canon_world = T_WC.act(frame.X_canon)  # Transform to world coordinates  
                     
-                    # TODO(yiwen) delate this
-                    if X_canon_world.max()==0: # relocation
-                        print(f"cannot update scaler at frame {i}")
+                    # # TODO(yiwen) delate this
+                    # if X_canon_world.max()==0: # relocation
+                    #     print(f"cannot update scaler at frame {i}")
   
-                    else:
-                        # Extract world coordinates
-                        X_world = X_canon_world[:, 0].cpu().numpy()  # X coordinates in world
-                        Y_world = X_canon_world[:, 1].cpu().numpy()  # Y coordinates in world  
-                        Z_world = X_canon_world[:, 2].cpu().numpy()  # Z coordinates in world
+                    # else:
+                    #     # Extract world coordinates
+                    #     X_world = X_canon_world[:, 0].cpu().numpy()  # X coordinates in world
+                    #     Y_world = X_canon_world[:, 1].cpu().numpy()  # Y coordinates in world  
+                    #     Z_world = X_canon_world[:, 2].cpu().numpy()  # Z coordinates in world
                         
-                        # Calculate distances from world origin NOTE(yiwen) cam coord z only, world coord euclidean distance
-                        distances_world = np.sqrt(X_world**2 + Y_world**2 + Z_world**2)
-                        valid_distances = distances_world[valid_mask]
+                    #     # Calculate distances from world origin NOTE(yiwen) cam coord z only, world coord euclidean distance
+                    #     distances_world = np.sqrt(X_world**2 + Y_world**2 + Z_world**2)
+                    #     valid_distances = distances_world[valid_mask]
 
-                        # print(f"debug -- valid_distances min max {valid_distances.min()} {valid_distances.max()}")
-                        # print(f'debug -- metric depth min max {metric_depth.min()} {metric_depth.max()}')
+                    #     # print(f"debug -- valid_distances min max {valid_distances.min()} {valid_distances.max()}")
+                    #     # print(f'debug -- metric depth min max {metric_depth.min()} {metric_depth.max()}')
 
-                        # naive_scaler = valid_distances.min() / valid_depths.min() # has a better accuracy in nearby points
+                    #     # naive_scaler = valid_distances.min() / valid_depths.min() # has a better accuracy in nearby points
                     
                     naive_scaler = metric_depth.min() / valid_depths.min() # TODO(yiwen) latter has large difference
                     """
@@ -616,6 +649,8 @@ if __name__=='__main__':
             
             # save key frame results
             if add_new_kf:
+                # if len(keyframes)>5:
+                #     keyframes.pop(0) # TODO(yiwen) limit the number of keyframes to avoid memory overflow
                 keyframes.append(frame)
                 states.queue_global_optimization(len(keyframes) - 1)
 

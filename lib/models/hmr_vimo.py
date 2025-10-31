@@ -1,6 +1,5 @@
 import numpy as np
 import einops
-from tqdm import tqdm
 import torch
 import torch.nn as nn
 from torch.utils.data import default_collate
@@ -306,7 +305,7 @@ class HMR_VIMO(nn.Module):
                         img_center=img_center, normalization=True, dilate=1.2) # it is better to collect batchsize=1
         
         items = []
-        for i in tqdm(range(len(db))):
+        for i in range(len(db)):
             item = db[i] # dict
             items.append(item)
 
@@ -453,7 +452,7 @@ class HMR_VIMO(nn.Module):
 
         # To-do: efficient implementation with batch
         items = []
-        for i in tqdm(range(len(db))):
+        for i in range(len(db)):
 
             item = db[i] # dict
             items.append(item)

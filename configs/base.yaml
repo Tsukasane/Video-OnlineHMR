@@ -21,7 +21,7 @@ tracking:
   rel_error: 1e-3
   delta_norm: 1e-3
   huber: 1.345
-  match_frac_thresh: 0.36 # 0.333
+  match_frac_thresh: 0.421 # 0.333
   sigma_ray: 0.003
   sigma_dist: 1e+1
   sigma_pixel: 1.0
@@ -51,8 +51,8 @@ local_opt:
 
 retrieval:
   k: 3
-  min_thresh: 4e-3 # 5e-3
+  min_thresh: 0.005 # 5e-3 0.005
 
 reloc:
-  min_match_frac: 0.3
+  min_match_frac: 0.25
   strict: True
