@@ -9,7 +9,7 @@ import einops
 from .components.pose_transformer import TransformerDecoder
 
 import numpy as np
-from skimage.util.shape import view_as_windows
+# from skimage.util.shape import view_as_windows
 
 
 class ContinuousTimeEmbedding(nn.Module):
@@ -53,7 +53,6 @@ class TransformerBlock(nn.Module):
         self.head_dim = hidden_dim // num_heads
         self.max_cache = max_cache
 
-        # Q/K/V projections for self-attention
         self.q_proj_self = nn.Linear(hidden_dim, hidden_dim)
         self.k_proj_self = nn.Linear(hidden_dim, hidden_dim)
         self.v_proj_self = nn.Linear(hidden_dim, hidden_dim)
@@ -179,7 +178,7 @@ class TransformerBlock(nn.Module):
                 layer_cache['mem_k'] = layer_cache['mem_k'][:,T:,:]
                 layer_cache['mem_v'] = layer_cache['mem_v'][:,T:,:]
             layer_cache['mem_k'] = torch.cat([layer_cache['mem_k'], k_mem_t], dim=1)
-            layer_cache['mem_v'] = torch.cat([layer_cache['mem_v'], v_mem_t], dim=1) # cat的操作和两帧的reshape是一样的嘛
+            layer_cache['mem_v'] = torch.cat([layer_cache['mem_v'], v_mem_t], dim=1)
         else:
             layer_cache['mem_k'] = k_mem_t
             layer_cache['mem_v'] = v_mem_t
@@ -253,7 +252,7 @@ class SMPLTransformerDecoderHead(nn.Module): # use the context from one image
         nn.init.xavier_uniform_(self.decshape.weight, gain=0.01)
         nn.init.xavier_uniform_(self.deccam.weight, gain=0.01)
 
-        mean_params = np.load('/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/data/smpl/smpl_mean_params.npz')
+        mean_params = np.load('./data/smpl/smpl_mean_params.npz')
         init_body_pose = torch.from_numpy(mean_params['pose'].astype(np.float32)).unsqueeze(0)
         init_betas = torch.from_numpy(mean_params['shape'].astype('float32')).unsqueeze(0)
         init_cam = torch.from_numpy(mean_params['cam'].astype(np.float32)).unsqueeze(0)
@@ -421,8 +420,8 @@ if __name__=="__main__":
                                                                             t=t, 
                                                                             device=device, 
                                                                             cache=cache)
-            print(f"cache {cache['layers'][0]['mem_k'].shape}") # TODO(yiwen) check the cache here
+            print(f"cache {cache['layers'][0]['mem_k'].shape}")
 
     print("smpl pose shape:", smpl_pose.shape)    # B*(T-max_memt), 144
     print("smpl shape shape:", smpl_shape.shape)    # B*(T-max_memt), 10
-    print("smpl cam shape:", smpl_cam.shape)    # B*(T-max_memt), 3 NOTE(yiwen) cut the first a couple of frames(max_cache) in GT
+    print("smpl cam shape:", smpl_cam.shape)

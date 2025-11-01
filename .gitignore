@@ -1,7 +1,6 @@
 __pycache__
 data/
 results/
-thirdparty/
 datasets/
 *.png
 *.out
@@ -13,3 +12,5 @@ logs/
 pytorch3d/
 checkpoints/
 res_human_camera/
+thirdparty/MASt3R-SLAM
+thirdparty/pytorch3d

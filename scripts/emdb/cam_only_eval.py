@@ -14,12 +14,13 @@ from lib.vis.traj import *
 from lib.camera.slam_utils import eval_slam
 
 """
-python /ocean/projects/cis210027p/yzhao16/Video-OnlineHMR/scripts/emdb/cam_only_eval.py
+python ./scripts/emdb/cam_only_eval.py --camera_root ./to_daniel/camera
 """
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--split', type=int, default=2)
 parser.add_argument('--input_dir', type=str, default='results/emdb')
+parser.add_argument('--camera_root', type=str, default='logs')
 args = parser.parse_args()
 input_dir = args.input_dir
 
@@ -28,7 +29,7 @@ slam_method = "mast3r_slam"
 # EMDB dataset and splits
 roots = []
 for p in range(10):
-    folder = f'./datasets/emdb/EMDB/P{p}'
+    folder = f'./../datasets/emdb/P{p}'
     root = sorted(glob(f'{folder}/*'))
     roots.extend(root)
 
@@ -40,7 +41,6 @@ for root in roots:
     if ann[f'emdb{spl}']:
         emdb.append(root)
 
-# emdb = emdb[:18]
 # Evaluation: Camera motion
 results = {}
 for root in emdb:
@@ -66,7 +66,7 @@ for root in emdb:
         pred_camq = matrix_to_quaternion(pred_camr)
     
     elif slam_method=="mast3r_slam":
-        root_dir = "./to_daniel/camera"
+        root_dir = args.camera_root
         scene_name = "_".join(root.split('/')[-2:]) # P0_09
         
         txt_file = os.path.join(root_dir, f"{scene_name}_images_incremental_all.txt")
@@ -89,10 +89,6 @@ for root in emdb:
             # to wxyz
             pred_camt_ls.append(vals[1:4])
             pred_camq_ls.append(wxyz)
-
-        # TODO(yiwen) check why mast3r-slam lacks one frame
-        # pred_camt_ls.append(vals[1:4])
-        # pred_camq_ls.append(wxyz)
 
         pred_camt = torch.tensor(pred_camt_ls)
         pred_camq = torch.tensor(pred_camq_ls)

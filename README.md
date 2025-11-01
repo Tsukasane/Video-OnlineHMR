@@ -7,16 +7,40 @@ git clone --recursive https://github.com/yufu-wang/tram
 ```
 2. Creating a new anaconda environment.
 ```Bash
-conda create -n tram python=3.10 -y
-conda activate tram
-bash install.sh
+conda create -n onlinetram python=3.11 cmake
+conda activate onlinetram
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+cd thirdparty
+
+# Mast3r-SLAM installation (modified /scr/yiwenzh5/Video-OnlineHMR/thirdparty/MASt3R-SLAM/mast3r_slam/dataloader.py #L273, TODO switch to a local fork)
+git clone https://github.com/rmurai0610/MASt3R-SLAM.git --recursive
+cd MASt3R-SLAM/
+pip install -e thirdparty/mast3r
+pip install -e thirdparty/in3d
+pip install --no-build-isolation -e .
+pip install torchcodec==0.1
+
+# Detectron2 installation
+pip install 'git+https://github.com/facebookresearch/detectron2.git@a59f05630a8f205756064244bf5beb8661f96180'
+
+# pytorch3d installation
+conda install -c conda-forge libstdcxx-ng
+pip install "git+https://github.com/facebookresearch/pytorch3d.git@stable"
+
+# MoGe installation
+pip install git+https://github.com/microsoft/MoGe.git
 ```
-3. Compile DROID-SLAM. If you encountered difficulty in this step, please refer to its [official release](https://github.com/princeton-vl/DROID-SLAM) for more info. In this project, DROID is modified to support masking. 
+
+3. Download Checkpoints 
+* Mast3r-SLAM checkpoints as released [here](https://github.com/rmurai0610/MASt3R-SLAM/tree/c3d0d5b67bf51d558d7640ff6032407f68041f92?tab=readme-ov-file#installation).
 ```Bash
-cd thirdparty/DROID-SLAM
-python setup.py install
-cd ../..
+mkdir -p checkpoints/
+wget https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth -P checkpoints/
+wget https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_trainingfree.pth -P checkpoints/
+wget https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_codebook.pkl -P checkpoints/
 ```
+* MoGe-v2 --> ``./pretrain/mogev2_model.pt``
+* Segment-Anything --> ``./pretrain/sam_vit_h_4b8939.pth``
 
 ## Prepare data
 Register at [SMPLify](https://smplify.is.tue.mpg.de) and [SMPL](https://smpl.is.tue.mpg.de), whose usernames and passwords will be used by our script to download the SMPL models. In addition, we will fetch trained checkpoints and an example video. Note that thirdparty models have their own licenses. 
@@ -78,13 +102,15 @@ python scripts/emdb/run_smpl.py --split 2 --output_dir "results/emdb/smpl"
 python scripts/emdb/run_eval.py --split 2 --input_dir "results/emdb"
 
 # for mast3r-slam evaluation
-# world coords HMR
-python scripts/emdb/run_eval_mast3r_slam.py --split 2 --input_dir ./res_human_camera
-# cam traj eval
-python /ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/scripts/emdb/cam_only_eval.py
 # online inference (set --calib true on emdb2)
 python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true
+# cam traj eval
+python ./scripts/emdb/cam_only_eval.py --camera_root <PRED_CAMERA_DIR>
+# world coords HMR
+python ./scripts/emdb/run_eval_mast3r_slam.py --split 2 --human_rootdir <PRED_HUMAN_DIR> --camera_rootdir <PRED_CAMERA_DIR>
+"""
 ```
+The output camera trajectory is saved to ``./logs``, camera coordinates hmr is saved to ``./res_human_camera``.
 
 **Metrics**
 - Pose and Shape

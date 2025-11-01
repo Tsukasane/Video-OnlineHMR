@@ -17,20 +17,21 @@ from lib.vis.traj import *
 from lib.camera.slam_utils import eval_slam
 
 """
-python scripts/emdb/run_eval_mast3r_slam.py --split 2 --input_dir ./to_daniel/human
+python ./scripts/emdb/run_eval_mast3r_slam.py --split 2 --human_rootdir ./to_daniel/human --camera_rootdir ./to_daniel/camera
 """
 
 failed_seqs = []
 parser = argparse.ArgumentParser()
 parser.add_argument('--split', type=int, default=2)
 parser.add_argument('--input_dir', type=str, default='results/emdb')
+parser.add_argument('--human_rootdir', type=str, default='res_human_camera')
+parser.add_argument('--camera_rootdir', type=str, default='logs')
 args = parser.parse_args()
-input_dir = args.input_dir
 
 # EMDB dataset and splits
 roots = []
 for p in range(10):
-    folder = f'./datasets/emdb/EMDB/P{p}'
+    folder = f'./../datasets/emdb/P{p}'
     root = sorted(glob(f'{folder}/*'))
     roots.extend(root)
 
@@ -42,8 +43,6 @@ for root in roots:
     if ann[f'emdb{spl}']:
         emdb.append(root)
 
-# emdb = emdb[:18]
-# breakpoint()
 failed_cnt = 0
 for f in failed_seqs:
     emdb.pop(f-failed_cnt)
@@ -95,9 +94,8 @@ for root in tqdm(emdb):
     
     # PRED
     seq = "_".join(root.split('/')[-2:])
-    pred_res = dict(np.load(f'{input_dir}/{seq}.npz'))
-    # pred_smpl = dict(np.load(f'{input_dir}/smpl/{seq}.npz'))
-
+    pred_res = dict(np.load(f'{args.human_rootdir}/{seq}.npz'))
+    
     pred_rotmat = torch.tensor(pred_res['pred_rotmat']) # T, 24, 3, 3
     pred_shape = torch.tensor(pred_res['pred_shape']) # T, 10
     pred_trans = torch.tensor(pred_res['pred_trans']) # T, 1, 3
@@ -115,7 +113,7 @@ for root in tqdm(emdb):
     pred_j3d = pred.joints[:, :24]
 
     cam_prefix = "_".join(seq.split("_")[:2])
-    cam_root = f"./to_daniel/camera/{seq}_images_incremental_all.txt"
+    cam_root = f"./{args.camera_rootdir}/{seq}_images_incremental_all.txt"
 
     with open(cam_root, "r") as f:
         lines = f.readlines()

@@ -1,7 +1,7 @@
 import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__) + '/../..')
-sys.path.insert(0, '/ocean/projects/cis240055p/yzhao16/MASt3R-SLAM') # TODO(yiwen) modify this to thirdparty/MASt3R-SLAM
+sys.path.insert(0, '/scr/yiwenzh5/Video-OnlineHMR/thirdparty/MASt3R-SLAM') # TODO(yiwen) modify this to thirdparty/MASt3R-SLAM
 
 import cv2
 import torch
@@ -113,10 +113,35 @@ def relocalization(frame, keyframes, factor_graph, retrieval_database):
         return successful_loop_closure
 
 
-def run_backend(cfg, model, states, keyframes, K):
+def run_backend(cfg, model_path_or_model, states, keyframes, K):
+    """
+    Backend process for SLAM optimization.
+    
+    Args:
+        cfg: Configuration
+        model_path_or_model: Either a model object (for fork mode) or None (for spawn mode, will load fresh)
+        states: Shared states
+        keyframes: Shared keyframes
+        K: Camera intrinsics
+    """
     set_global_config(cfg)
 
     device = keyframes.device
+    
+    # In spawn mode, passing CUDA models causes duplication. Load model fresh in child process.
+    # This is more memory efficient than serializing/deserializing CUDA tensors.
+    import torch
+    if model_path_or_model is None or isinstance(model_path_or_model, str):
+        # Load model from path or use default
+        from mast3r_slam.mast3r_utils import load_mast3r
+        model = load_mast3r(device=device)
+        model.eval()
+    else:
+        # Fork mode: use passed model
+        model = model_path_or_model
+        if next(model.parameters()).device != device:
+            model = model.to(device)
+    
     factor_graph = FactorGraph(model, keyframes, K, device)
     retrieval_database = load_retriever(model)
 
@@ -190,7 +215,7 @@ def register_emdb(args):
     for p in range(10):
         # if p>1: #NOTE(yiwen) debug
         #     break
-        folder = f'/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/datasets/emdb/EMDB/P{p}'
+        folder = f'./../datasets/emdb/P{p}'
         root = sorted(glob(f'{folder}/*'))
         roots.extend(root)
 
@@ -201,24 +226,25 @@ def register_emdb(args):
         ann = pkl.load(open(annfile, 'rb'))
         if ann[f'emdb{spl}']:
             emdb.append(root)
-
-    emdb = emdb[18:]
+    emdb = emdb[1:]
     return emdb
 
 
 def init_detector(device):
-    cfg_path = 'data/pretrain/cascade_mask_rcnn_vitdet_h_75ep.py'
+    cfg_path = './data/pretrain/cascade_mask_rcnn_vitdet_h_75ep.py'
     detectron2_cfg = LazyConfig.load(str(cfg_path))
     detectron2_cfg.train.init_checkpoint = "https://dl.fbaipublicfiles.com/detectron2/ViTDet/COCO/cascade_mask_rcnn_vitdet_h/f328730692/model_final_f05665.pkl"
     for i in range(3):
         detectron2_cfg.model.roi_heads.box_predictors[i].test_score_thresh = 0.25
     detector = DefaultPredictor_Lazy(detectron2_cfg)
+    detector.model.eval()
     return detector
 
 
 def init_sam(device):
-    sam = sam_model_registry["vit_h"](checkpoint="data/pretrain/sam_vit_h_4b8939.pth")
-    _ = sam.to(device)
+    sam = sam_model_registry["vit_h"](checkpoint="./data/pretrain/sam_vit_h_4b8939.pth")
+    sam = sam.to(device)
+    sam.eval() 
     predictor = SamPredictor(sam)
     return predictor
 
@@ -288,8 +314,8 @@ def load_camera_poses(cam_t, cam_q, scale=0.2, color_offset=0, gt=True):
 
 def load_mogev2_model(device):
     from moge.model.v2 import MoGeModel
-    mogev2_model = MoGeModel.from_pretrained("/ocean/projects/cis240055p/yzhao16/MoGe/pretrain/model.pt").to(device)                             
-
+    mogev2_model = MoGeModel.from_pretrained("./data/pretrain/mogev2_model.pt").to(device)                             
+    mogev2_model.eval()
     return mogev2_model
 
 
@@ -322,8 +348,15 @@ if __name__=='__main__':
     emdb = register_emdb(args) # dataset
     detector = init_detector(device) # ViTDet
     sam_predictor = init_sam(device) # SAM for human mask
-    hmr_model = get_hmr_vimo(checkpoint='/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/results/online_videohmrv5_actionrate21_lr1e-4_1/checkpoint_best.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
+    hmr_model = get_hmr_vimo(checkpoint='./results/checkpoint_best.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
     metric_depth_model = load_mogev2_model(device)
+    
+    # Load MASt3R-SLAM model once for all sequences (shared across sequences)
+    # share_memory() is called once here, as the model instance is reused across sequences
+    # Each sequence will have its own backend process that accesses this shared model
+    mast3r_model = load_mast3r(device=device)
+    mast3r_model.eval()
+    mast3r_model.share_memory()  # Enable IPC for multiprocessing (spawn mode)
 
     # SMPL
     smpl = SMPL()
@@ -353,7 +386,7 @@ if __name__=='__main__':
         if 'emdb' in root:
             args.calib = True
        
-        if args.calib: # TODO(yiwen) add support of using calib
+        if args.calib: # TODO(yiwen) clean up this argument
             # load annotations if eval on emdb2
             annfile = f'{root}/{root.split("/")[-2]}_{root.split("/")[-1]}_data.pkl'
             ann = pkl.load(open(annfile, 'rb'))
@@ -386,8 +419,9 @@ if __name__=='__main__':
             )
             viz.start()
         
-        model = load_mast3r(device=device) # TODO(yiwen) change the name of model
-        model.share_memory()
+        # Use the pre-loaded model (already share_memory() called globally)
+        # Each sequence has its own backend process that accesses this shared model
+        model = mast3r_model
 
         has_calib = dataset.has_calib()
         use_calib = config["use_calib"]
@@ -415,7 +449,15 @@ if __name__=='__main__':
         last_msg = WindowMsg()
 
         # start backend
-        backend = mp.Process(target=run_backend, args=(config, model, states, keyframes, K))
+        # NOTE: In spawn mode, CUDA models cannot be shared between processes.
+        # The backend process will load its own copy of the model, resulting in:
+        # - Main process: model on GPU (~21GB)
+        # - Backend process: model on GPU (~21GB)
+        # This is unavoidable in spawn mode due to CUDA context isolation.
+        # Total GPU memory: ~42GB for both processes.
+        # Alternative: Use fork mode (if compatible) or redesign to use threads.
+        backend_model_arg = None  # Backend will load model fresh in its own process
+        backend = mp.Process(target=run_backend, args=(config, backend_model_arg, states, keyframes, K))
         backend.start()
 
         # NOTE(yiwen) frontend loop, incrementally loop all frames
@@ -448,7 +490,7 @@ if __name__=='__main__':
         render.scene.set_background([0, 0, 0, 1])
         set_render_camera = False # render cam (the third viewpoint)
 
-        # cloud material
+        # materials
         human_mat = o3d.visualization.rendering.MaterialRecord()
         human_mat.shader = "defaultLit"
         cam_mat = o3d.visualization.rendering.MaterialRecord()
@@ -456,10 +498,6 @@ if __name__=='__main__':
         
         # start looping the video seq
         while True:
-            # if i>=50: # TODO(yiwen) debug
-            #     states.set_mode(Mode.TERMINATED)
-            #     break
-
             ###### Camera Pose SLAM --> output Cam_R, Cam_T, also camera coordinates absolute depth (then convert to world depth) ######
             mode = states.get_mode()
             msg = try_get_msg(viz2main)
@@ -561,25 +599,6 @@ if __name__=='__main__':
                     metric_depth = metric_depth_model.infer(depth_input_img)["depth"]
 
                     # X_canon_world = T_WC.act(frame.X_canon)  # Transform to world coordinates  
-                    
-                    # # TODO(yiwen) delate this
-                    # if X_canon_world.max()==0: # relocation
-                    #     print(f"cannot update scaler at frame {i}")
-  
-                    # else:
-                    #     # Extract world coordinates
-                    #     X_world = X_canon_world[:, 0].cpu().numpy()  # X coordinates in world
-                    #     Y_world = X_canon_world[:, 1].cpu().numpy()  # Y coordinates in world  
-                    #     Z_world = X_canon_world[:, 2].cpu().numpy()  # Z coordinates in world
-                        
-                    #     # Calculate distances from world origin NOTE(yiwen) cam coord z only, world coord euclidean distance
-                    #     distances_world = np.sqrt(X_world**2 + Y_world**2 + Z_world**2)
-                    #     valid_distances = distances_world[valid_mask]
-
-                    #     # print(f"debug -- valid_distances min max {valid_distances.min()} {valid_distances.max()}")
-                    #     # print(f'debug -- metric depth min max {metric_depth.min()} {metric_depth.max()}')
-
-                    #     # naive_scaler = valid_distances.min() / valid_depths.min() # has a better accuracy in nearby points
                     
                     naive_scaler = metric_depth.min() / valid_depths.min() # TODO(yiwen) latter has large difference
                     """
@@ -887,10 +906,7 @@ if __name__=='__main__':
             del viz2main
         del manager
         
-        # Clear CUDA cache to avoid memory issues
         torch.cuda.empty_cache()
-        
-        # Clean up Open3D renderer
         del render
         
         print(f"Sequence {root} completed and cleaned up")
