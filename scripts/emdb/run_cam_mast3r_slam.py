@@ -226,7 +226,7 @@ def register_emdb(args):
         ann = pkl.load(open(annfile, 'rb'))
         if ann[f'emdb{spl}']:
             emdb.append(root)
-    emdb = emdb[1:]
+    emdb = emdb[12:]
     return emdb
 
 
@@ -335,7 +335,7 @@ if __name__=='__main__':
     parser.add_argument("--config", default="configs/base.yaml")
     parser.add_argument("--save_dir", default="./res_human_camera")
     parser.add_argument("--no-viz", action="store_true")
-    parser.add_argument("--calib", type=bool) # TODO(yiwen) add some of the configs to parser
+    parser.add_argument("--calib", type=bool)
 
     args = parser.parse_args()
 
@@ -390,7 +390,6 @@ if __name__=='__main__':
             # load annotations if eval on emdb2
             annfile = f'{root}/{root.split("/")[-2]}_{root.split("/")[-1]}_data.pkl'
             ann = pkl.load(open(annfile, 'rb'))
-            ext = ann['camera']['extrinsics']
             intr = ann['camera']['intrinsics']
             ann_boxes = ann['bboxes']['bboxes'] # (2009, 4) NOTE(yiwen) for emdb, boxes are given, if not, run detection
 
@@ -814,8 +813,6 @@ if __name__=='__main__':
                 print(f"FPS: {FPS}")
             i += 1
 
-            # TODO(yiwen) 这里其实应该每一帧去做多进程？然后.join()
-
         # Save gif
         if visualize_hcgif:
             imageio.mimsave(out_gif, imgs, fps=10)
@@ -904,15 +901,8 @@ if __name__=='__main__':
         if not args.no_viz:
             del main2viz
             del viz2main
-        del manager
-        
+        del manager    
         torch.cuda.empty_cache()
         del render
         
         print(f"Sequence {root} completed and cleaned up")
-        
-        """
-        camcoord_hmr.join()
-        """
-
-    
