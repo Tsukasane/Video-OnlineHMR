@@ -1,7 +1,7 @@
 import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__) + '/../..')
-sys.path.insert(0, '/scr/yiwenzh5/Video-OnlineHMR/thirdparty/MASt3R-SLAM') # TODO(yiwen) modify this to thirdparty/MASt3R-SLAM
+sys.path.insert(0, '/scr/yiwenzh5/Video-OnlineHMR/thirdparty/MASt3R-SLAM')
 
 import cv2
 import torch
@@ -557,7 +557,6 @@ if __name__=='__main__':
             # Extract depth information from current frame
             if frame.X_canon is not None:
 
-                # TODO(yiwen) SLAM output camera coords depth
                 depths = frame.X_canon[:, 2].cpu().numpy()  # Z coordinates as depth
                 confidences = frame.get_average_conf().cpu().numpy()
                 
@@ -733,7 +732,8 @@ if __name__=='__main__':
         # visualize human-camera gif
         if visualize_hcgif and i % render_interval == 0:
             # Remove i-2 geometry to avoid accumulation (keep only current and previous frame)
-            prev_frame_idx = i - render_interval * 2  # i-2 when render_interval=2
+            num_keep_frames = 1
+            prev_frame_idx = i - render_interval * num_keep_frames  # keep five previous frames
             if prev_frame_idx >= 0:
                 try:
                     render.scene.remove_geometry(f"human{prev_frame_idx}")
@@ -757,7 +757,7 @@ if __name__=='__main__':
 
             if not set_render_camera:
                 center = human_mesh.get_center()
-                view_radius = 3
+                view_radius = 8
                 eye0 = center + np.array([view_radius, view_radius, view_radius])
                 radius = np.linalg.norm(eye0 - center)
 
@@ -783,7 +783,7 @@ if __name__=='__main__':
 
     # Save gif
     if visualize_hcgif:
-        imageio.mimsave(out_gif, imgs, fps=10)
+        imageio.mimsave(out_gif, imgs, fps=30)
         print(f"✅ Saved gif to {out_gif}")
 
     
@@ -808,9 +808,6 @@ if __name__=='__main__':
             f"{name_prefix}_{seq_name}.ply",
             keyframes,
             last_msg.C_conf_threshold,
-        )
-        eval.save_keyframes(
-            cam_savedir / "keyframes" / seq_name, dataset.timestamps, keyframes
         )
 
     print("done")

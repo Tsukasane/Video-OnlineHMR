@@ -43,7 +43,6 @@ for root in roots:
     if ann[f'emdb{spl}']:
         emdb.append(root)
 
-emdb = emdb[11:12]
 failed_cnt = 0
 for f in failed_seqs:
     emdb.pop(f-failed_cnt)

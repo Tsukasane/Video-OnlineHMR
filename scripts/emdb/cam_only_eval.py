@@ -41,7 +41,7 @@ for root in roots:
     if ann[f'emdb{spl}']:
         emdb.append(root)
 
-emdb = emdb[:12]
+# emdb = emdb[:12]
 # Evaluation: Camera motion
 results = {}
 for root in emdb:
