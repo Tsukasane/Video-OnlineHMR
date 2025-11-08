@@ -145,7 +145,7 @@ def render_scene_with_cameras(ply_file, pose_file, out_gif="scene.gif", angle=18
     # Camera view setup - increased distance for better view
     center = pcd.get_center()
     up = [0, 1, 0]
-    view_radius = 5  # Increased from 5 to 10 for wider view
+    view_radius = 12  # Increased from 5 to 10 for wider view
     eye0 = center + np.array([view_radius, view_radius, view_radius])
 
     imgs = []
@@ -262,7 +262,7 @@ if __name__ == "__main__":
     cam_traj_path = args.cam_traj_path
     scene_ply_path = args.scene_ply_path
     render_scene_with_cameras(scene_ply_path, cam_traj_path, 
-                              f"output_{args.save_prefix}_camera_scene.gif",
+                              f"output_{args.save_prefix}_camera_human_scene.gif",
                               angle=180,
                               human_npz_path=args.human_npz_path,
                               render_interval=args.render_interval)

@@ -2,7 +2,7 @@
 
 ## Installation
 1. Clone this repo with the `--recursive` flag.
-```Bash
+```Bash TODO(yiwen) change this
 git clone --recursive https://github.com/yufu-wang/tram
 ```
 2. Creating a new anaconda environment.
@@ -51,26 +51,10 @@ bash scripts/download_models.sh
 ```
 
 ## Run demo on videos
-Run the following scripts **sequentially**. All results will be saved in a folder with the same name as the video.
 
-1. Run Masked Droid SLAM (also detect+track humans in this step)
-    ```bash
-    python scripts/estimate_camera.py --video "./example_video1.mov"
-    # You can indicate if the camera is static. The algorithm will try to catch it as well.
-    python scripts/estimate_camera.py --video "./another_video.mov" --static_camera
-    ```
-
-2. Run 4D human capture with VIMO.
-    ```bash
-    # modify #Line45 checkpoint path
-    # modify valid_range in config ./lib/models/configs/config_vimo.yaml
-    python scripts/estimate_humans.py --video "./example_video1.mov"
-    ```
-
-3. Put everything together. Render the output video.
-    ```bash
-    python scripts/visualize_tram.py --video "./example_video1.mov"
-    ```
+```bash
+python ./scripts/emdb/run_custom.py --video <YOUR/VIDEO/PATH>.mp4 --no-viz --calib false
+```
 
 ## Preparation
 * Data organization
@@ -94,14 +78,6 @@ python train.py --cfg configs/config_vimo.yaml
 
 ## Evaluation
 ```
-# modify valid_range in ./lib/models/configs/config_vimo.yaml, also run_smpl.py
-bash scripts/emdb/run.sh
-# or separately
-python scripts/emdb/run_cam.py --split 2 --output_dir "results/emdb/camera"
-python scripts/emdb/run_smpl.py --split 2 --output_dir "results/emdb/smpl"
-python scripts/emdb/run_eval.py --split 2 --input_dir "results/emdb"
-
-# for mast3r-slam evaluation
 # online inference (set --calib true on emdb2)
 python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true
 # cam traj eval

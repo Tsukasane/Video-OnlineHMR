@@ -6,7 +6,8 @@ datasets/
 *.out
 *.mov
 *.mp4
-*.txt
+note.txt
+
 README.md
 logs/
 pytorch3d/

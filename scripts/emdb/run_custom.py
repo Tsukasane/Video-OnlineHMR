@@ -381,7 +381,10 @@ if __name__=='__main__':
     #         cam_int,
     #     )
 
-    keyframes = SharedKeyframes(manager, rimg_h, rimg_w)
+    # Allow configurable buffer size for long videos
+    # Default is 512, but can be increased via config
+    max_keyframes = config.get("tracking", {}).get("max_keyframes", 512)
+    keyframes = SharedKeyframes(manager, rimg_h, rimg_w, buffer=max_keyframes)
     states = SharedStates(manager, rimg_h, rimg_w)
     
     if not args.no_viz: # NOTE(yiwen) 这里的visualization换成viser，但是需要看一下涉及到的multi processing

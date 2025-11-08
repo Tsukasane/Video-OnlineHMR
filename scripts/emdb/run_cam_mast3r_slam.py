@@ -53,6 +53,8 @@ from segment_anything import SamPredictor, sam_model_registry
 NOTE(yiwen) v100/h100 have compile difference (yeah, cannot run on v100)
 python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true
 
+CUDA_VISIBLE_DEVICES=4 python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true
+
 multiprocess: one frame in
 slam-frontend 
 slam-backend
@@ -70,40 +72,41 @@ single_color2 = [
 def relocalization(frame, keyframes, factor_graph, retrieval_database):
     # we are adding and then removing from the keyframe, so we need to be careful.
     # The lock slows viz down but safer this way...
-    with keyframes.lock:
-        kf_idx = []
-        retrieval_inds = retrieval_database.update(
-            frame,
-            add_after_query=False,
-            k=config["retrieval"]["k"],
-            min_thresh=config["retrieval"]["min_thresh"],
-        )
-        kf_idx += retrieval_inds
-        successful_loop_closure = False
-        if kf_idx:
-            keyframes.append(frame)
-            n_kf = len(keyframes)
-            kf_idx = list(kf_idx)  # convert to list
-            frame_idx = [n_kf - 1] * len(kf_idx)
-            print("RELOCALIZING against kf ", n_kf - 1, " and ", kf_idx)
-            if factor_graph.add_factors(
-                frame_idx,
-                kf_idx,
-                config["reloc"]["min_match_frac"],
-                is_reloc=config["reloc"]["strict"],
-            ):
-                retrieval_database.update(
-                    frame,
-                    add_after_query=True,
-                    k=config["retrieval"]["k"],
-                    min_thresh=config["retrieval"]["min_thresh"],
-                )
-                print("Success! Relocalized")
-                successful_loop_closure = True
-                keyframes.T_WC[n_kf - 1] = keyframes.T_WC[kf_idx[0]].clone()
-            else:
-                keyframes.pop_last()
-                print("Failed to relocalize")
+    try:
+        with keyframes.lock:
+            kf_idx = []
+            retrieval_inds = retrieval_database.update(
+                frame,
+                add_after_query=False,
+                k=config["retrieval"]["k"],
+                min_thresh=config["retrieval"]["min_thresh"],
+            )
+            kf_idx += retrieval_inds
+            successful_loop_closure = False
+            if kf_idx:
+                keyframes.append(frame)
+                n_kf = len(keyframes)
+                kf_idx = list(kf_idx)  # convert to list
+                frame_idx = [n_kf - 1] * len(kf_idx)
+                print("RELOCALIZING against kf ", n_kf - 1, " and ", kf_idx)
+                if factor_graph.add_factors(
+                    frame_idx,
+                    kf_idx,
+                    config["reloc"]["min_match_frac"],
+                    is_reloc=config["reloc"]["strict"],
+                ):
+                    retrieval_database.update(
+                        frame,
+                        add_after_query=True,
+                        k=config["retrieval"]["k"],
+                        min_thresh=config["retrieval"]["min_thresh"],
+                    )
+                    print("Success! Relocalized")
+                    successful_loop_closure = True
+                    keyframes.T_WC[n_kf - 1] = keyframes.T_WC[kf_idx[0]].clone()
+                else:
+                    keyframes.pop_last()
+                    print("Failed to relocalize")
 
         if successful_loop_closure:
             if config["use_calib"]:
@@ -111,6 +114,9 @@ def relocalization(frame, keyframes, factor_graph, retrieval_database):
             else:
                 factor_graph.solve_GN_rays()
         return successful_loop_closure
+    except (KeyError, AttributeError, BrokenPipeError) as e:
+        print(f"Warning: Manager lock error in relocalization: {e}")
+        return False
 
 
 def run_backend(cfg, model_path_or_model, states, keyframes, K):
@@ -159,9 +165,15 @@ def run_backend(cfg, model_path_or_model, states, keyframes, K):
             states.dequeue_reloc()
             continue
         idx = -1
-        with states.lock:
-            if len(states.global_optimizer_tasks) > 0:
-                idx = states.global_optimizer_tasks[0]
+        try:
+            with states.lock:
+                if len(states.global_optimizer_tasks) > 0:
+                    idx = states.global_optimizer_tasks[0]
+        except (KeyError, AttributeError, BrokenPipeError) as e:
+            # Handle Manager object errors (e.g., when process is terminating)
+            print(f"Warning: Manager lock error in backend: {e}")
+            time.sleep(0.1)
+            continue
         if idx == -1:
             time.sleep(0.01)
             continue
@@ -195,18 +207,26 @@ def run_backend(cfg, model_path_or_model, states, keyframes, K):
                 kf_idx, frame_idx, config["local_opt"]["min_match_frac"]
             )
 
-        with states.lock:
-            states.edges_ii[:] = factor_graph.ii.cpu().tolist()
-            states.edges_jj[:] = factor_graph.jj.cpu().tolist()
+        try:
+            with states.lock:
+                states.edges_ii[:] = factor_graph.ii.cpu().tolist()
+                states.edges_jj[:] = factor_graph.jj.cpu().tolist()
+        except (KeyError, AttributeError, BrokenPipeError) as e:
+            print(f"Warning: Manager update error in backend: {e}")
+            continue
 
         if config["use_calib"]:
             factor_graph.solve_GN_calib()
         else:
             factor_graph.solve_GN_rays()
 
-        with states.lock:
-            if len(states.global_optimizer_tasks) > 0:
-                idx = states.global_optimizer_tasks.pop(0)
+        try:
+            with states.lock:
+                if len(states.global_optimizer_tasks) > 0:
+                    idx = states.global_optimizer_tasks.pop(0)
+        except (KeyError, AttributeError, BrokenPipeError) as e:
+            print(f"Warning: Manager pop error in backend: {e}")
+            continue
 
 
 def register_emdb(args):
@@ -226,7 +246,7 @@ def register_emdb(args):
         ann = pkl.load(open(annfile, 'rb'))
         if ann[f'emdb{spl}']:
             emdb.append(root)
-    emdb = emdb[12:]
+    # emdb = emdb[:]
     return emdb
 
 
@@ -408,7 +428,10 @@ if __name__=='__main__':
                 cam_int,
             )
 
-        keyframes = SharedKeyframes(manager, rimg_h, rimg_w)
+        # Allow configurable buffer size for long videos
+        # Default is 512, but can be increased via config or command line
+        max_keyframes = config.get("tracking", {}).get("max_keyframes", 512)
+        keyframes = SharedKeyframes(manager, rimg_h, rimg_w, buffer=max_keyframes)
         states = SharedStates(manager, rimg_h, rimg_w)
         
         if not args.no_viz: # NOTE(yiwen) 这里的visualization换成viser，但是需要看一下涉及到的multi processing
@@ -517,7 +540,6 @@ if __name__=='__main__':
             timestamp, img = dataset[i] # the original size, 0-1 scale
             img_cv2 = dataset.read_img(i) # the original size, 0-255 scale
 
-            # --- Build human mask with SAM (using GT boxes on EMDB or detector otherwise) ---
             boxes_np = None
             if 'emdb' in root and args.calib:
                 boxes_np = np.array(ann_boxes[i]).reshape(-1, 4)
@@ -529,6 +551,7 @@ if __name__=='__main__':
                         valid_idx = (det_instances.pred_classes==0) & (det_instances.scores > 0.5)
                         boxes_np = det_instances.pred_boxes.tensor[valid_idx].cpu().numpy()
 
+            # --- Build human mask with SAM (using GT boxes on EMDB or detector otherwise) --- 
             if boxes_np is not None and boxes_np.shape[0] > 0:
                 with autocast('cuda'):
                     sam_predictor.set_image(img_cv2, image_format='BGR')

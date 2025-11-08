@@ -21,7 +21,7 @@ tracking:
   rel_error: 1e-3
   delta_norm: 1e-3
   huber: 1.345
-  match_frac_thresh: 0.391 # 0.333
+  match_frac_thresh: 0.397 # 0.333
   sigma_ray: 0.003
   sigma_dist: 1e+1
   sigma_pixel: 1.0
