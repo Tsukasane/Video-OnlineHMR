@@ -306,6 +306,13 @@ if __name__=='__main__':
     parser.add_argument("--no-viz", action="store_true")
     parser.add_argument("--calib", type=bool)
     parser.add_argument("--video", type=str, required=True, help="path to the input video")
+    parser.add_argument("--smooth-method", type=str, default='moving_avg', 
+                       choices=['none', 'moving_avg', 'ema', 'kalman'],
+                       help='Smoothing method for camera poses: none, moving_avg, ema, kalman')
+    parser.add_argument("--smooth-window", type=int, default=5,
+                       help='Window size for moving average smoothing (default: 5)')
+    parser.add_argument("--smooth-alpha", type=float, default=0.3,
+                       help='Alpha for exponential moving average (0-1, default: 0.3)')
 
     args = parser.parse_args()
 
@@ -460,7 +467,25 @@ if __name__=='__main__':
     naive_scaler = 1.0 # init depth-based scaler
     fix_scaler = 1.0
     imgs = [] # for rendered images
+    
+    # Online smoothing for camera poses
+    from collections import deque
+    
+    # Get smoothing parameters from args
+    smooth_method = args.smooth_method
+    smooth_window = args.smooth_window
+    smooth_alpha = args.smooth_alpha
+    
+    # Initialize smoothing buffers
+    pose_buffer = deque(maxlen=smooth_window)  # Store (t, x, y, z, qx, qy, qz, qw)
+    smoothed_pose = None
+    
+    # Kalman filter state (simplified, only for translation)
+    kalman_state = None  # (x, y, z, vx, vy, vz) - position and velocity
+    kalman_P = None  # Covariance matrix (6x6 for position + velocity)
+    
     print(f"Start per frame processing")
+    print(f"Smoothing method: {smooth_method}, window: {smooth_window}, alpha: {smooth_alpha}")
 
     # Offscreen renderer
     visualize_hcgif = True
@@ -625,12 +650,147 @@ if __name__=='__main__':
         if dataset.save_results:
             save_dir, seq_name = eval.prepare_savedir(args, dataset)
             traj_file = save_dir / f"{name_prefix}_{seq_name}_incremental_all.txt"
+            
+            t = dataset.timestamps[frame.frame_id]
+            T_WC = as_SE3(frame.T_WC)
+            x, y, z, qx, qy, qz, qw = T_WC.data.numpy().reshape(-1)
+            
+            # Apply online smoothing
+            if smooth_method == 'none':
+                # No smoothing, use raw tracking result
+                x_smooth, y_smooth, z_smooth = x, y, z
+                qx_smooth, qy_smooth, qz_smooth, qw_smooth = qx, qy, qz, qw
+            elif smooth_method == 'moving_avg':
+                # Moving average smoothing
+                pose_buffer.append((t, x, y, z, qx, qy, qz, qw))
+                if len(pose_buffer) >= 2:
+                    # Average translation
+                    x_smooth = np.mean([p[1] for p in pose_buffer])
+                    y_smooth = np.mean([p[2] for p in pose_buffer])
+                    z_smooth = np.mean([p[3] for p in pose_buffer])
+                    
+                    # Average rotation (using quaternion averaging)
+                    quats = np.array([[p[4], p[5], p[6], p[7]] for p in pose_buffer])
+                    # Normalize quaternions
+                    quats = quats / np.linalg.norm(quats, axis=1, keepdims=True)
+                    # Simple average (better would be SLERP, but this is faster)
+                    q_avg = np.mean(quats, axis=0)
+                    q_avg = q_avg / np.linalg.norm(q_avg)
+                    qx_smooth, qy_smooth, qz_smooth, qw_smooth = q_avg
+                else:
+                    # Not enough samples yet, use current
+                    x_smooth, y_smooth, z_smooth = x, y, z
+                    qx_smooth, qy_smooth, qz_smooth, qw_smooth = qx, qy, qz, qw
+            elif smooth_method == 'ema':
+                # Exponential moving average
+                if smoothed_pose is None:
+                    smoothed_pose = (x, y, z, qx, qy, qz, qw)
+                    x_smooth, y_smooth, z_smooth = x, y, z
+                    qx_smooth, qy_smooth, qz_smooth, qw_smooth = qx, qy, qz, qw
+                else:
+                    # EMA for translation
+                    x_smooth = smooth_alpha * x + (1 - smooth_alpha) * smoothed_pose[0]
+                    y_smooth = smooth_alpha * y + (1 - smooth_alpha) * smoothed_pose[1]
+                    z_smooth = smooth_alpha * z + (1 - smooth_alpha) * smoothed_pose[2]
+                    
+                    # EMA for rotation (quaternion SLERP approximation)
+                    q_prev = np.array([smoothed_pose[3], smoothed_pose[4], smoothed_pose[5], smoothed_pose[6]])
+                    q_curr = np.array([qx, qy, qz, qw])
+                    # Normalize
+                    q_prev = q_prev / np.linalg.norm(q_prev)
+                    q_curr = q_curr / np.linalg.norm(q_curr)
+                    # Ensure same hemisphere
+                    if np.dot(q_prev, q_curr) < 0:
+                        q_curr = -q_curr
+                    # Linear interpolation (approximation of SLERP)
+                    q_smooth = (1 - smooth_alpha) * q_prev + smooth_alpha * q_curr
+                    q_smooth = q_smooth / np.linalg.norm(q_smooth)
+                    qx_smooth, qy_smooth, qz_smooth, qw_smooth = q_smooth
+                    
+                    smoothed_pose = (x_smooth, y_smooth, z_smooth, qx_smooth, qy_smooth, qz_smooth, qw_smooth)
+            else:  # kalman filter (simplified implementation)
+                # Simplified Kalman filter for camera pose smoothing
+                # Note: Full Kalman filter for SE(3) would require EKF/UKF on manifolds
+                # This is a simplified version that filters translation with constant velocity model
+                # and uses EMA for rotation (quaternion space is non-linear)
+                
+                dt = 1.0  # Assume constant frame rate (could use actual timestamps)
+                
+                # Process noise (how much we expect the state to change)
+                Q_pos = 0.01  # Position process noise
+                Q_vel = 0.1   # Velocity process noise
+                
+                # Measurement noise (how much we trust the measurements)
+                R = 0.1  # Measurement noise
+                
+                if kalman_state is None:
+                    # Initialize: position from measurement, velocity = 0
+                    kalman_state = np.array([x, y, z, 0.0, 0.0, 0.0])  # [x, y, z, vx, vy, vz]
+                    kalman_P = np.eye(6) * 1.0  # Initial covariance
+                    x_smooth, y_smooth, z_smooth = x, y, z
+                    qx_smooth, qy_smooth, qz_smooth, qw_smooth = qx, qy, qz, qw
+                else:
+                    # State transition matrix (constant velocity model)
+                    # x_new = x_old + v * dt
+                    # v_new = v_old (constant velocity)
+                    F = np.array([
+                        [1, 0, 0, dt, 0, 0],
+                        [0, 1, 0, 0, dt, 0],
+                        [0, 0, 1, 0, 0, dt],
+                        [0, 0, 0, 1, 0, 0],
+                        [0, 0, 0, 0, 1, 0],
+                        [0, 0, 0, 0, 0, 1]
+                    ])
+                    
+                    # Process noise matrix
+                    Q = np.eye(6)
+                    Q[0, 0] = Q[1, 1] = Q[2, 2] = Q_pos * dt**2
+                    Q[3, 3] = Q[4, 4] = Q[5, 5] = Q_vel * dt
+                    
+                    # Measurement matrix (we observe position directly)
+                    H = np.array([
+                        [1, 0, 0, 0, 0, 0],
+                        [0, 1, 0, 0, 0, 0],
+                        [0, 0, 1, 0, 0, 0]
+                    ])
+                    
+                    # Measurement
+                    z = np.array([x, y, z])
+                    
+                    # Prediction step
+                    kalman_state = F @ kalman_state
+                    kalman_P = F @ kalman_P @ F.T + Q
+                    
+                    # Update step
+                    y = z - H @ kalman_state  # Innovation
+                    S = H @ kalman_P @ H.T + R * np.eye(3)  # Innovation covariance
+                    K = kalman_P @ H.T @ np.linalg.inv(S)  # Kalman gain
+                    
+                    kalman_state = kalman_state + K @ y
+                    kalman_P = (np.eye(6) - K @ H) @ kalman_P
+                    
+                    # Use filtered position
+                    x_smooth, y_smooth, z_smooth = kalman_state[:3]
+                    
+                    # For rotation, use EMA (quaternion space is non-linear, would need EKF/UKF)
+                    if smoothed_pose is None:
+                        smoothed_pose = (x, y, z, qx, qy, qz, qw)
+                        qx_smooth, qy_smooth, qz_smooth, qw_smooth = qx, qy, qz, qw
+                    else:
+                        q_prev = np.array([smoothed_pose[3], smoothed_pose[4], smoothed_pose[5], smoothed_pose[6]])
+                        q_curr = np.array([qx, qy, qz, qw])
+                        q_prev = q_prev / np.linalg.norm(q_prev)
+                        q_curr = q_curr / np.linalg.norm(q_curr)
+                        if np.dot(q_prev, q_curr) < 0:
+                            q_curr = -q_curr
+                        q_smooth = 0.3 * q_prev + 0.7 * q_curr  # EMA for rotation
+                        q_smooth = q_smooth / np.linalg.norm(q_smooth)
+                        qx_smooth, qy_smooth, qz_smooth, qw_smooth = q_smooth
+                        smoothed_pose = (x_smooth, y_smooth, z_smooth, qx_smooth, qy_smooth, qz_smooth, qw_smooth)
+            
             with open(traj_file, "a") as f:  # append
-                t = dataset.timestamps[frame.frame_id]
-                T_WC = as_SE3(frame.T_WC)
-                x, y, z, qx, qy, qz, qw = T_WC.data.numpy().reshape(-1)
-                f.write(f"{naive_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
-                # f.write(f"{t} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
+                f.write(f"{naive_scaler} {x_smooth} {y_smooth} {z_smooth} {qx_smooth} {qy_smooth} {qz_smooth} {qw_smooth}\n")
+                # f.write(f"{t} {x_smooth} {y_smooth} {z_smooth} {qx_smooth} {qy_smooth} {qz_smooth} {qw_smooth}\n")
         
         # save key frame results
         if add_new_kf:
