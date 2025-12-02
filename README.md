@@ -54,6 +54,7 @@ bash scripts/download_models.sh
 
 ```bash
 python ./scripts/emdb/run_custom.py --video <YOUR/VIDEO/PATH>.mp4 --no-viz --calib false
+python visualize_viser.py --human_npz_path <HUMAN/NPZ/PATH>.npz --camera_path <CAMERA/TXT/PATH>.txt
 ```
 
 ## Preparation
