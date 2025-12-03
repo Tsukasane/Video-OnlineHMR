@@ -1,7 +1,28 @@
 import os
 import torch
+import numpy as np
 import shutil
 import logging
+
+
+def safe_from_numpy(array):
+    """
+    Safely convert numpy array to torch tensor.
+    Ensures array is C-contiguous before calling torch.from_numpy.
+    
+    Args:
+        array: numpy array or array-like object
+    
+    Returns:
+        torch.Tensor
+    """
+    if isinstance(array, np.ndarray):
+        if not array.flags['C_CONTIGUOUS']:
+            array = np.ascontiguousarray(array)
+        return torch.from_numpy(array)
+    else:
+        # If not numpy array, use torch.tensor instead
+        return torch.tensor(array)
 
 
 def prepare_output_dir(cfg):

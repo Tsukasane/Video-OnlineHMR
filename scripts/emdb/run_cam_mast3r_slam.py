@@ -1,7 +1,20 @@
 import sys
 import os
+# Force OSMesa rendering - disable EGL and X11
+# These must be set BEFORE importing open3d
+os.environ["OPEN3D_CPU_RENDERING"] = "true"
+os.environ["OPEN3D_HEADLESS"] = "1"
+os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
+if "DISPLAY" in os.environ:
+    del os.environ["DISPLAY"]
+# Force OSMesa platform for PyOpenGL (if used)
+os.environ["PYOPENGL_PLATFORM"] = "osmesa"
+# Additional Mesa/OSMesa settings for software rendering
+os.environ["GALLIUM_DRIVER"] = "llvmpipe"  # Use software rendering driver
+os.environ["MESA_GL_VERSION_OVERRIDE"] = "3.3"  # Set OpenGL version
+
 sys.path.insert(0, os.path.dirname(__file__) + '/../..')
-sys.path.insert(0, '/scr/yiwenzh5/Video-OnlineHMR/thirdparty/MASt3R-SLAM') # TODO(yiwen) modify this to thirdparty/MASt3R-SLAM
+sys.path.insert(0, './thirdparty/MASt3R-SLAM') # TODO(yiwen) modify this to thirdparty/MASt3R-SLAM
 
 import cv2
 import torch
@@ -51,9 +64,7 @@ from segment_anything import SamPredictor, sam_model_registry
 
 """
 NOTE(yiwen) v100/h100 have compile difference (yeah, cannot run on v100)
-python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true
-
-CUDA_VISIBLE_DEVICES=4 python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true
+python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true --soft-mask true
 
 multiprocess: one frame in
 slam-frontend 
@@ -246,7 +257,6 @@ def register_emdb(args):
         ann = pkl.load(open(annfile, 'rb'))
         if ann[f'emdb{spl}']:
             emdb.append(root)
-    # emdb = emdb[:]
     return emdb
 
 
@@ -356,6 +366,7 @@ if __name__=='__main__':
     parser.add_argument("--save_dir", default="./res_human_camera")
     parser.add_argument("--no-viz", action="store_true")
     parser.add_argument("--calib", type=bool)
+    parser.add_argument("--soft-mask", type=bool)
 
     args = parser.parse_args()
 
@@ -552,6 +563,7 @@ if __name__=='__main__':
                         boxes_np = det_instances.pred_boxes.tensor[valid_idx].cpu().numpy()
 
             # --- Build human mask with SAM (using GT boxes on EMDB or detector otherwise) --- 
+            human_mask = None
             if boxes_np is not None and boxes_np.shape[0] > 0:
                 with autocast('cuda'):
                     sam_predictor.set_image(img_cv2, image_format='BGR')
@@ -565,7 +577,46 @@ if __name__=='__main__':
                     )
                 masks = masks.detach().cpu().squeeze(1)  # (N, H, W)
                 human_mask = (masks.sum(dim=0) > 0).numpy()  # (H, W) bool
-                if human_mask.any():
+
+                if args.soft_mask:
+                    args.soft_mask_gamma = 0.85
+                    args.soft_mask_radius = 1.0
+                    dilation_iterations = 3
+                    sigma = 5.0
+                    kernel_size = 15
+
+                    masks_np = human_mask.astype(np.float32)
+                    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+                    dilated = cv2.dilate(masks_np, kernel, iterations=dilation_iterations)
+                    kernel_size_blur = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
+                    soft_masks = cv2.GaussianBlur(dilated, (kernel_size_blur, kernel_size_blur), sigma)
+                    # Store soft_mask for confidence masking (use soft_mask instead of binary mask)
+                    human_mask = soft_masks  # Keep as numpy array for confidence masking
+                    # Apply soft mask to image: multiply image by (1 - soft_mask) to gradually fade out human regions
+                    img = img * (1.0 - soft_masks[..., np.newaxis])  # Add channel dimension for broadcasting
+
+                    ## visualize soft masked image
+                    # if i==29:
+                    #     # visualize soft mask
+                    #     import matplotlib.pyplot as plt
+                        
+                    #     mask_visualize = human_mask
+                    #     img_np = img.detach().cpu().numpy() if hasattr(img, 'detach') else img
+
+                    #     if img_np.max() > 1.5:
+                    #         img_np = img_np / 255.0
+
+                    #     overlay_color = np.array([0.0, 0.0, 0.0])
+                    #     overlay = img_np * (1 - mask_visualize[..., None]) + overlay_color * mask_visualize[..., None]
+
+                    #     plt.imshow(overlay)
+                    #     plt.axis('off')
+                    #     plt.title('Human Mask Overlay')
+                    #     plt.savefig("mask_overlay.png", bbox_inches='tight', pad_inches=0)
+                    #     plt.close()
+
+
+                elif human_mask.any(): # hard mask
                     # img is float [0,1], HxWx3; zero-out human regions
                     img[human_mask] = 0.0
 
@@ -622,7 +673,7 @@ if __name__=='__main__':
 
                     # X_canon_world = T_WC.act(frame.X_canon)  # Transform to world coordinates  
                     
-                    naive_scaler = metric_depth.min() / valid_depths.min() # TODO(yiwen) latter has large difference
+                    naive_scaler = metric_depth.min() / valid_depths.min()
                     """
                     slam depth * scale = pred depth
 
@@ -690,8 +741,6 @@ if __name__=='__main__':
             
             # save key frame results
             if add_new_kf:
-                # if len(keyframes)>5:
-                #     keyframes.pop(0) # TODO(yiwen) limit the number of keyframes to avoid memory overflow
                 keyframes.append(frame)
                 states.queue_global_optimization(len(keyframes) - 1)
 
@@ -738,8 +787,8 @@ if __name__=='__main__':
                     # record some missing hmr e.g. all zeros to npy/txt
                     continue
 
-                # TODO(yiwen) multiple persons 的时候还是需要一下tracking？否则会检测出来多个bounding boxes，confidence都足够高，这种情况下应该不能直接用bbox去筛选
-                # 或者用bbox center过滤一下
+                # TODO(yiwen) multiple persons add tracking？
+                # use bbox center to filter
                 elif boxes.shape[0]>1: # when multiple person detected
                     boxes = boxes[0:1]
             

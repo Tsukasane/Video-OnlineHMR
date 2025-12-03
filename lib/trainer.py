@@ -130,8 +130,6 @@ class Trainer(BaseTrainer):
         gt_vertices = None
         pred_vertices = None
 
-        # evaluator = Evaluator(dataset_length=len(db.imgname),
-        #                       seq_len=getattr(model, 'seq_len', None))
         evaluator = Evaluator(dataset_length=len(db.imgname),
                               seq_len=getattr(model, 'seq_len', None))
         J_regressor = db.J_regressor.to(device)
@@ -166,17 +164,22 @@ class Trainer(BaseTrainer):
                 elif 'emdb' in db.dataset: # emdb_1 v
                     mode = 'emdb'
                     smpl_out = model.smpl.query(out, default_smpl=True)
+                    gt_vertices = batch['gt_verts']
+
+                    pred_vertices = smpl_out.vertices
                     pred_keypoints_3d = smpl_out.joints[:, :24]
 
                     pred_pelvis = pred_keypoints_3d[:,[1,2],:].mean(dim=1, keepdim=True).clone()
                     pred_keypoints_3d = pred_keypoints_3d - pred_pelvis # NOTE(yiwen) only focus on relative motion, not absolute position
                     
+                pred_vertices = pred_vertices - pred_pelvis 
             # evaluation
             evaluator(gt_keypoints_3d, pred_keypoints_3d, mode, gt_vertices, pred_vertices)
 
         re = evaluator.re[:evaluator.counter].mean()
         mpjpe = evaluator.mpjpe[:evaluator.counter].mean()
         acc = evaluator.acc[:evaluator.counter].mean()
+        pve = evaluator.pve[:evaluator.counter].mean()
         jitter = evaluator.jitter[:evaluator.counter].mean()
         jitter_gt = evaluator.jitter_gt[:evaluator.counter].mean()
 
@@ -184,12 +187,14 @@ class Trainer(BaseTrainer):
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation re: {re}")
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation mpjpe: {mpjpe}")
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation accel: {acc}")
+        logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation pve: {pve}")
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation jitter: {jitter}")
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation jitter: {jitter_gt}")
 
         self.writer.add_scalar(f"Validation/RE", re, self.global_step)
         self.writer.add_scalar(f"Validation/MPJPE", mpjpe, self.global_step)
         self.writer.add_scalar(f"Validation/ACCEL", acc, self.global_step)
+        self.writer.add_scalar(f"Validation/PVE", pve, self.global_step)
         self.writer.add_scalar(f"Validation/JITTER", jitter, self.global_step)
         self.writer.add_scalar(f"Validation/JITTER_GT", jitter_gt, self.global_step)
         self.writer.flush()

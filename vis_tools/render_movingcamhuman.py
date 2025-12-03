@@ -1,5 +1,19 @@
 import sys
 import os
+# Force OSMesa rendering - disable EGL and X11
+# These must be set BEFORE importing open3d
+os.environ["OPEN3D_CPU_RENDERING"] = "true"
+os.environ["OPEN3D_HEADLESS"] = "1"
+os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
+# Unset DISPLAY to prevent X11/EGL usage (forces OSMesa)
+if "DISPLAY" in os.environ:
+    del os.environ["DISPLAY"]
+# Force OSMesa platform for PyOpenGL (if used)
+os.environ["PYOPENGL_PLATFORM"] = "osmesa"
+# Additional Mesa/OSMesa settings for software rendering
+os.environ["GALLIUM_DRIVER"] = "llvmpipe"  # Use software rendering driver
+os.environ["MESA_GL_VERSION_OVERRIDE"] = "3.3"  # Set OpenGL version
+
 sys.path.insert(0, os.path.dirname(__file__) + '/..')
 
 import open3d as o3d
@@ -118,9 +132,16 @@ def render_scene_with_cameras(ply_file, pose_file, out_gif="scene.gif", angle=18
         smpl = SMPL()
         print(f"Loaded {len(human_data['pred_rotmat'])} frames of human mesh data")
 
-    # Offscreen renderer
+    # Offscreen renderer with OSMesa
     w, h = 800, 600
-    render = o3d.visualization.rendering.OffscreenRenderer(w, h)
+    try:
+        print("[Info] Initializing OSMesa renderer...")
+        render = o3d.visualization.rendering.OffscreenRenderer(w, h)
+        print("[Info] OSMesa renderer initialized successfully")
+    except Exception as e:
+        print(f"[Error] Failed to initialize OSMesa renderer: {e}")
+        print("[Error] Please ensure OSMesa is installed: sudo apt-get install libosmesa6-dev")
+        raise
 
     # Background black
     render.scene.set_background([0, 0, 0, 1])
@@ -145,7 +166,7 @@ def render_scene_with_cameras(ply_file, pose_file, out_gif="scene.gif", angle=18
     # Camera view setup - increased distance for better view
     center = pcd.get_center()
     up = [0, 1, 0]
-    view_radius = 12  # Increased from 5 to 10 for wider view
+    view_radius = 9  # Increased from 5 to 10 for wider view
     eye0 = center + np.array([view_radius, view_radius, view_radius])
 
     imgs = []
@@ -188,9 +209,10 @@ def render_scene_with_cameras(ply_file, pose_file, out_gif="scene.gif", angle=18
             current_camr = quaternion_to_matrix(current_camq)
             
             # Get human mesh parameters for this frame (in camera coordinates)
-            pred_rotmat = torch.tensor(human_data['pred_rotmat'][i:i+1])  # [1, 24, 3, 3]
-            pred_shape = torch.tensor(human_data['pred_shape'][i:i+1])  # [1, 10]
-            pred_trans = torch.tensor(human_data['pred_trans'][i:i+1])  # [1, 1, 3]
+            # Use torch.tensor() instead of torch.from_numpy() for better compatibility
+            pred_rotmat = torch.tensor(human_data['pred_rotmat'][i:i+1], dtype=torch.float32)  # [1, 24, 3, 3]
+            pred_shape = torch.tensor(human_data['pred_shape'][i:i+1], dtype=torch.float32)  # [1, 10]
+            pred_trans = torch.tensor(human_data['pred_trans'][i:i+1], dtype=torch.float32)  # [1, 1, 3]
             
             # Generate SMPL mesh (in camera coordinates)
             pred = smpl(body_pose=pred_rotmat[:, 1:], 
@@ -236,7 +258,7 @@ def render_scene_with_cameras(ply_file, pose_file, out_gif="scene.gif", angle=18
         imgs.append(img_np)
 
     # Save gif
-    imageio.mimsave(out_gif, imgs, fps=10)
+    imageio.mimsave(out_gif, imgs, fps=30)
     print(f"✅ Saved gif to {out_gif}")
 
 
@@ -262,7 +284,7 @@ if __name__ == "__main__":
     cam_traj_path = args.cam_traj_path
     scene_ply_path = args.scene_ply_path
     render_scene_with_cameras(scene_ply_path, cam_traj_path, 
-                              f"output_{args.save_prefix}_camera_human_scene.gif",
+                              f"output_{args.save_prefix}_camera_human_scene1.gif",
                               angle=180,
                               human_npz_path=args.human_npz_path,
                               render_interval=args.render_interval)

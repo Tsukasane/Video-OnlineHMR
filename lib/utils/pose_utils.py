@@ -13,27 +13,32 @@ from freq_motion import plot_spectrogram, plot_amplitude
 import pickle
 
 def select_valid(batch_tensor, batch_size):
-    batch_tensor = batch_tensor.reshape(batch_size, -1, *batch_tensor.shape[1:])[:,2:,...]
+    batch_tensor = batch_tensor.reshape(batch_size, -1, *batch_tensor.shape[1:])[:,2:,...] # max_cache=2
     batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
 
     return batch_tensor
 
-# NOTE(yiwen) ignore the first couple of GT since the pred doesn't have these
-def cal_spectrogram_similarity(gt_amp, pred_amp):
-    # 1) MSE
+
+def cal_spectrogram_similarity(gt_amp, pred_amp, alpha=0.5, eps=1e-8):
+    # gt_amp, pred_amp: tensors, same shape, non-negative amplitude
+
+    # 1) MSE & normalized RMSE
     mse = torch.mean((gt_amp - pred_amp) ** 2)
+    rmse = torch.sqrt(mse + eps)
+    gt_std = torch.std(gt_amp) # normalize by gt std
+    rmse_norm = rmse / (gt_std + eps)  # >=0
+    mse_pct = rmse_norm * 100.0
 
-    # 2) LSD, but the log10 design is more for audio
-    lsd = torch.sqrt(torch.mean((20 * torch.log10(gt_amp + 1e-6) - 20 * torch.log10(pred_amp + 1e-6)) ** 2))
-
-    # 3) Corr
+    # 2) Corr -> map to 0..1
     gt_mean = torch.mean(gt_amp)
     pred_mean = torch.mean(pred_amp)
     numerator = torch.sum((gt_amp - gt_mean) * (pred_amp - pred_mean))
     denominator = torch.sqrt(torch.sum((gt_amp - gt_mean) ** 2) * torch.sum((pred_amp - pred_mean) ** 2))
-    corr = numerator / (denominator + 1e-8)
+    corr = numerator / (denominator + eps)
+    corr_loss = (1.0 - corr) / 2.0   # 0..1, 0 best
+    corr_pct = corr_loss * 100.0
 
-    print(f'spectrogram similarity -- MSE:{mse}, LSD:{lsd}, CORR:{corr}')
+    print(f"debug -- mse_pct: {mse_pct}; corr_pct: {corr_pct}")
 
 
 def compute_error_accel(joints_gt, joints_pred, vis=None):
@@ -217,7 +222,7 @@ class Evaluator:
         self.valid_range = (1,1)
         self.chunk_size = 16
 
-        self.visualize_spec = False
+        self.visualize_spec = True
         self.visualize_verticesspec = False # false in emdb_1, true in 3dpw_test_vid
 
 
@@ -226,8 +231,8 @@ class Evaluator:
         
         '''
         Args:
-            - gt_keypoints_3d(tensor): bs * 3, 24, 4
-            - pred_keypoints_3d(tensor): bs * 3, 24, 3
+            - gt_keypoints_3d(tensor): numseq(8) * seqlen(16), J, 4
+            - pred_keypoints_3d(tensor): numseq * seqlen, 24, 3
             - gt_verts: bs * 3, 6890, 3
             - pred_verts: bs * 3, 6890, 3
         '''
@@ -243,6 +248,11 @@ class Evaluator:
         # # 48, 24, 3 --> 16, 24, 3 (T, J, 3) NOTE(yiwen) we do not change the validation bs
         # gt_valid = select_valid(gt_valid, self.valid_range)
         # pred_valid = select_valid(pred_valid, self.valid_range)
+        # TODO(yiwen) make it to args, only for debug now
+        use_train_pipeline_to_valid = True
+        batch_t = 8
+        if use_train_pipeline_to_valid:
+            gt_valid = select_valid(gt_valid, batch_t)
 
         # NOTE(yiwen) fps=30
         if self.visualize_verticesspec: # one time for each validation pass
@@ -277,12 +287,7 @@ class Evaluator:
             # cal_spectrogram_similarity(gtnoise_amplitude, pred_amplitude)
             self.visualize_spec = False
         
-
-        # TODO(yiwen) make it to args, only for debug now
-        use_train_pipeline_to_valid = True
-        batch_t = 8
-        if use_train_pipeline_to_valid:
-            gt_valid = select_valid(gt_valid, batch_t)
+        breakpoint()
 
         batch_size = gt_valid.shape[0]
         # Compute joint errors
@@ -294,6 +299,10 @@ class Evaluator:
         if gt_verts is not None and pred_verts is not None:
             if use_train_pipeline_to_valid:
                 gt_verts = select_valid(gt_verts, batch_t)
+        
+            pred_pelvis = pred_keypoints_3d[:,[1,2],:].mean(dim=1, keepdim=True).clone()
+            pred_keypoints_3d = pred_keypoints_3d - pred_pelvis 
+            
             pve = (pred_verts - gt_verts).norm(dim=-1).mean(dim=-1).cpu().numpy()
             self.pve[self.counter:self.counter+batch_size] = pve * 1000
 

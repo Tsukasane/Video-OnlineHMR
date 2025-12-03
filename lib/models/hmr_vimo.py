@@ -326,21 +326,6 @@ class HMR_VIMO(nn.Module):
         return results, cache
 
 
-    # def inference_ar_online(self, imgfiles, boxes, img_focal=None, img_center=None, valid=None, frame=None, device='cuda'):
-    #     """
-    #     imgfiles: (3,) numpy.array 3 frames chunk, each time inference the result of the last frame
-    #     boxes: (3, 5) 3 frames boxes, the last dim is confidence
-    #     """
-
-    #     # TODO(yiwen) remove the boxes?
-
-    #     # NOTE(yiwen) this chunk is only for all tracking results
-    #     results = self.inference_chunk_ar(imgfiles, boxes, img_focal=img_focal, img_center=img_center)
-        
-    #     return results
-
-
-
     def inference_ar(self, imgfiles, boxes, img_focal=None, img_center=None, valid=None, frame=None, device='cuda'):
         nfile = len(imgfiles)
         if valid is None:
@@ -376,7 +361,7 @@ class HMR_VIMO(nn.Module):
             pred_shape.append(results['pred_shape'])
             pred_rotmat.append(results['pred_rotmat'])
             pred_trans.append(results['pred_trans'])
-            frame.append(torch.from_numpy(frame_ck))
+            frame.append(torch.tensor(frame_ck))
 
         results = {'pred_cam': torch.cat(pred_cam),
                 'pred_pose': torch.cat(pred_pose),
@@ -427,7 +412,7 @@ class HMR_VIMO(nn.Module):
             pred_shape.append(results['pred_shape'])
             pred_rotmat.append(results['pred_rotmat'])
             pred_trans.append(results['pred_trans'])
-            frame.append(torch.from_numpy(frame_ck))
+            frame.append(torch.tensor(frame_ck))
 
         results = {'pred_cam': torch.cat(pred_cam),
                 'pred_pose': torch.cat(pred_pose),
@@ -557,9 +542,9 @@ class HMR_VIMO(nn.Module):
         SMPL_MEAN_PARAMS = 'data/smpl/smpl_mean_params.npz'
 
         mean_params = np.load(SMPL_MEAN_PARAMS)
-        init_pose = torch.from_numpy(mean_params['pose'][:]).unsqueeze(0)
-        init_shape = torch.from_numpy(mean_params['shape'][:].astype('float32')).unsqueeze(0)
-        init_cam = torch.from_numpy(mean_params['cam']).unsqueeze(0)
+        init_pose = torch.tensor(mean_params['pose'][:]).unsqueeze(0)
+        init_shape = torch.tensor(mean_params['shape'][:].astype('float32')).unsqueeze(0)
+        init_cam = torch.tensor(mean_params['cam'], dtype=torch.float32).unsqueeze(0)
         self.register_buffer('init_pose', init_pose)
         self.register_buffer('init_shape', init_shape)
         self.register_buffer('init_cam', init_cam)

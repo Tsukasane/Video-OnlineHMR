@@ -1,3 +1,18 @@
+import sys
+import os
+# Force OSMesa rendering - disable EGL and X11
+# These must be set BEFORE importing open3d
+os.environ["OPEN3D_CPU_RENDERING"] = "true"
+os.environ["OPEN3D_HEADLESS"] = "1"
+os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
+# Unset DISPLAY to prevent X11/EGL usage (forces OSMesa)
+if "DISPLAY" in os.environ:
+    del os.environ["DISPLAY"]
+# Force OSMesa platform for PyOpenGL (if used)
+os.environ["PYOPENGL_PLATFORM"] = "osmesa"
+# Additional Mesa/OSMesa settings for software rendering
+os.environ["GALLIUM_DRIVER"] = "llvmpipe"  # Use software rendering driver
+os.environ["MESA_GL_VERSION_OVERRIDE"] = "3.3"  # Set OpenGL version
 import open3d as o3d
 import numpy as np
 import imageio
@@ -145,7 +160,7 @@ if __name__ == "__main__":
     
     cam_traj_path = args.cam_traj_path
     scene_ply_path = args.scene_ply_path
-    render_scene_with_cameras(scene_ply_path, cam_traj_path, f"output_{args.save_prefix}_camera_scene.gif")
+    render_scene_with_cameras(scene_ply_path, cam_traj_path, f"output_{args.save_prefix}_camera_scene1.gif")
 
 
 

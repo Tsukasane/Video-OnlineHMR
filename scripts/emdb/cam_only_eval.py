@@ -14,7 +14,7 @@ from lib.vis.traj import *
 from lib.camera.slam_utils import eval_slam
 
 """
-python ./scripts/emdb/cam_only_eval.py --camera_root ./to_daniel/camera
+python ./scripts/emdb/cam_only_eval.py --camera_root ./soft_mask_mast3r_slam/camera
 """
 
 parser = argparse.ArgumentParser()
@@ -41,9 +41,11 @@ for root in roots:
     if ann[f'emdb{spl}']:
         emdb.append(root)
 
-# emdb = emdb[:12]
 # Evaluation: Camera motion
 results = {}
+all_ate = 0
+ate_cnt = 0
+
 for root in emdb:
     # Annotation
     annfile = f'{root}/{root.split("/")[-2]}_{root.split("/")[-1]}_data.pkl'
@@ -106,7 +108,14 @@ for root in emdb:
   
     current_ate = np.mean(stats_slam['mean'])
     print(f"debug -- current ate:{current_ate}")
-   
+
+    all_ate += current_ate
+    ate_cnt += 1
+
+
+print(f"average ate: {all_ate / ate_cnt}")
+
+
 
 # ate = np.mean([re['stats_slam']['mean'] for re in results.values()])
 # ate_s = np.mean([re['stats_metric']['mean'] for re in results.values()])

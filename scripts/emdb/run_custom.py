@@ -1,10 +1,26 @@
 import sys
 import os
+# Force OSMesa rendering - disable EGL and X11
+# These must be set BEFORE importing open3d
+os.environ["OPEN3D_CPU_RENDERING"] = "true"
+os.environ["OPEN3D_HEADLESS"] = "1"
+os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
+# Unset DISPLAY to prevent X11/EGL usage (forces OSMesa)
+if "DISPLAY" in os.environ:
+    del os.environ["DISPLAY"]
+# Force OSMesa platform for PyOpenGL (if used)
+os.environ["PYOPENGL_PLATFORM"] = "osmesa"
+# Additional Mesa/OSMesa settings for software rendering
+os.environ["GALLIUM_DRIVER"] = "llvmpipe"  # Use software rendering driver
+os.environ["MESA_GL_VERSION_OVERRIDE"] = "3.3"  # Set OpenGL version
+
+
 sys.path.insert(0, os.path.dirname(__file__) + '/../..')
-sys.path.insert(0, '/scr/yiwenzh5/Video-OnlineHMR/thirdparty/MASt3R-SLAM')
+sys.path.insert(0, '/edrive2/yiwenzh5/Video-OnlineHMR/thirdparty/MASt3R-SLAM')
 
 import cv2
 import torch
+import torch.nn.functional as F
 import argparse
 import numpy as np
 import pickle as pkl
@@ -49,7 +65,8 @@ from detectron2.config import LazyConfig
 from segment_anything import SamPredictor, sam_model_registry
 
 """
-python ./scripts/emdb/run_custom.py --video ./tdance.mp4 --no-viz --calib false
+python ./scripts/emdb/run_custom.py --video ./tdance.mp4 --no-viz --calib false --smooth-method none
+python ./scripts/emdb/run_custom.py --video ./rock_climbing1.mp4 --no-viz --calib false --smooth-method ema
 """
 
 single_color1 = [
@@ -58,6 +75,41 @@ single_color1 = [
 single_color2 = [
     [0.0, 0.8, 1.0],
 ]
+
+def quaternion_translation_to_Sim3(t, q, device):
+    """
+    Convert quaternion and translation to lietorch.Sim3.
+    
+    Args:
+        t: translation [x, y, z] or numpy array/torch tensor
+        q: quaternion [qx, qy, qz, qw] or numpy array/torch tensor  
+        device: torch device
+    
+    Returns:
+        lietorch.Sim3 object
+    """
+    if isinstance(t, np.ndarray):
+        t = torch.from_numpy(t).float()
+    if isinstance(q, np.ndarray):
+        q = torch.from_numpy(q).float()
+    
+    # Ensure correct shape: [3] for translation, [4] for quaternion
+    if t.dim() > 1:
+        t = t.flatten()[:3]
+    if q.dim() > 1:
+        q = q.flatten()[:4]
+    
+    # Ensure we have exactly 3 and 4 elements
+    t = t[:3].to(device)
+    q = q[:4].to(device)
+    
+    # Sim3 format: [t, q, s] where s is scale (set to 1.0 for SE(3))
+    # lietorch.Sim3 expects data in format [tx, ty, tz, qx, qy, qz, qw, s]
+    # Shape should be [1, 8] for batch dimension
+    s = torch.ones(1, device=device, dtype=t.dtype)
+    sim3_data = torch.cat([t, q, s], dim=0).unsqueeze(0)  # [1, 8]
+    return lietorch.Sim3(sim3_data)
+
 
 def relocalization(frame, keyframes, factor_graph, retrieval_database):
     # we are adding and then removing from the keyframe, so we need to be careful.
@@ -288,6 +340,52 @@ def load_mogev2_model(device):
     return mogev2_model
 
 
+def process_mask_soft_margin(mask, method='gaussian', kernel_size=15, sigma=5.0, dilation_iterations=3):
+    """
+    Process binary mask to create soft margin using Gaussian blur and/or dilation.
+    
+    Args:
+        mask: binary mask (H, W) bool or (H, W) float [0,1]
+        method: 'gaussian', 'dilation', or 'both'
+        kernel_size: kernel size for Gaussian blur (should be odd)
+        sigma: sigma for Gaussian blur
+        dilation_iterations: number of dilation iterations
+    
+    Returns:
+        soft_mask: float mask [0,1] with soft margins
+    """
+    # Convert to float if boolean
+    if mask.dtype == bool:
+        mask = mask.astype(np.float32)
+    else:
+        mask = mask.astype(np.float32)
+    
+    if method == 'gaussian':
+        # Apply Gaussian blur to create soft edges
+        kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1  # Ensure odd
+        soft_mask = cv2.GaussianBlur(mask, (kernel_size, kernel_size), sigma)
+        return soft_mask
+    
+    elif method == 'dilation':
+        # Apply dilation to expand mask, then blur for soft edges
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        dilated = cv2.dilate(mask, kernel, iterations=dilation_iterations)
+        # Apply Gaussian blur to smooth the dilated edges
+        kernel_size_blur = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
+        soft_mask = cv2.GaussianBlur(dilated, (kernel_size_blur, kernel_size_blur), sigma)
+        return soft_mask
+    
+    elif method == 'both':
+        # First dilate, then apply Gaussian blur
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        dilated = cv2.dilate(mask, kernel, iterations=dilation_iterations)
+        kernel_size_blur = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
+        soft_mask = cv2.GaussianBlur(dilated, (kernel_size_blur, kernel_size_blur), sigma)
+        return soft_mask
+    
+    else:  # 'none' or invalid
+        return mask
+
 
 if __name__=='__main__':
     mp.set_start_method("spawn")
@@ -306,13 +404,30 @@ if __name__=='__main__':
     parser.add_argument("--no-viz", action="store_true")
     parser.add_argument("--calib", type=bool)
     parser.add_argument("--video", type=str, required=True, help="path to the input video")
-    parser.add_argument("--smooth-method", type=str, default='moving_avg', 
-                       choices=['none', 'moving_avg', 'ema', 'kalman'],
+    parser.add_argument("--smooth-method", type=str, default='ema', 
+                       choices=['none', 'ema'],
                        help='Smoothing method for camera poses: none, moving_avg, ema, kalman')
     parser.add_argument("--smooth-window", type=int, default=5,
                        help='Window size for moving average smoothing (default: 5)')
-    parser.add_argument("--smooth-alpha", type=float, default=0.3,
+    parser.add_argument("--smooth-alpha", type=float, default=0.2,
                        help='Alpha for exponential moving average (0-1, default: 0.3)')
+    parser.add_argument("--ema-history", type=int, default=10,
+                       help='Number of history frames to use for EMA weighted average (default: 10)')
+    parser.add_argument("--ema-clamp-multiplier", type=float, default=0.2,
+                       help='Multiplier for velocity-based clamp threshold (default: 0.2, lower = stricter)')
+    parser.add_argument("--ema-clamp-absolute-max", type=float, default=None,
+                       help='Absolute maximum update allowed regardless of velocity (default: None, disabled)')
+    parser.add_argument("--update-slam-pose", action="store_true",
+                       help='Update SLAM internal pose with smoothed pose (may affect optimization)')
+    parser.add_argument("--mask-method", type=str, default='both',
+                       choices=['none', 'gaussian', 'dilation', 'both'],
+                       help='Method for mask soft margin: none, gaussian, dilation, both (default: gaussian)')
+    parser.add_argument("--mask-kernel-size", type=int, default=15,
+                       help='Kernel size for mask processing (default: 15)')
+    parser.add_argument("--mask-sigma", type=float, default=5.0,
+                       help='Sigma for Gaussian blur in mask processing (default: 5.0)')
+    parser.add_argument("--mask-dilation-iterations", type=int, default=3,
+                       help='Number of dilation iterations for mask processing (default: 3)')
 
     args = parser.parse_args()
 
@@ -367,26 +482,6 @@ if __name__=='__main__':
     dataset = load_dataset(img_folder)
     dataset.subsample(config["dataset"]["subsample"]) # set to 1 by default
     rimg_h, rimg_w = dataset.get_img_shape()[0] # resized image and resized shape
-    
-    # if args.calib: #TODO(yiwen) to support provided intrinsics
-    #     # load annotations if eval on emdb2
-    #     annfile = args.calib
-    #     ann = pkl.load(open(annfile, 'rb'))
-    #     intr = ann['camera']['intrinsics']
-    #     cam_int = [intr[0,0], intr[1,1], intr[0,2], intr[1,2]]
-    #     img_focal = (intr[0,0] +  intr[1,1]) / 2.
-    #     img_center = intr[:2, 2]
-
-    #     # register to mast3r-slam
-    #     intrinsics = intr # yaml.load(f, Loader=yaml.SafeLoader)
-    #     config["use_calib"] = True
-    #     dataset.use_calibration = True
-    #     dataset.camera_intrinsics = Intrinsics.from_calib(
-    #         dataset.img_size, # resized
-    #         img_w, # original
-    #         img_h,
-    #         cam_int,
-    #     )
 
     # Allow configurable buffer size for long videos
     # Default is 512, but can be increased via config
@@ -394,7 +489,7 @@ if __name__=='__main__':
     keyframes = SharedKeyframes(manager, rimg_h, rimg_w, buffer=max_keyframes)
     states = SharedStates(manager, rimg_h, rimg_w)
     
-    if not args.no_viz: # NOTE(yiwen) 这里的visualization换成viser，但是需要看一下涉及到的multi processing
+    if not args.no_viz: # TODO(yiwen) remove this
         viz = mp.Process(
             target=run_visualization,
             args=(config, states, keyframes, main2viz, viz2main),
@@ -468,6 +563,7 @@ if __name__=='__main__':
     fix_scaler = 1.0
     imgs = [] # for rendered images
     
+    mask_thres = 1e-4
     # Online smoothing for camera poses
     from collections import deque
     
@@ -475,33 +571,47 @@ if __name__=='__main__':
     smooth_method = args.smooth_method
     smooth_window = args.smooth_window
     smooth_alpha = args.smooth_alpha
+    ema_history = args.ema_history
+    ema_clamp_multiplier = args.ema_clamp_multiplier
+    ema_clamp_absolute_max = args.ema_clamp_absolute_max
     
     # Initialize smoothing buffers
-    pose_buffer = deque(maxlen=smooth_window)  # Store (t, x, y, z, qx, qy, qz, qw)
     smoothed_pose = None
     
-    # Kalman filter state (simplified, only for translation)
-    kalman_state = None  # (x, y, z, vx, vy, vz) - position and velocity
-    kalman_P = None  # Covariance matrix (6x6 for position + velocity)
+    # EMA history buffer: store (x, y, z) for translation smoothing and velocity estimation
+    ema_history_buffer = deque(maxlen=ema_history)  # Store (x, y, z) tuples
     
     print(f"Start per frame processing")
     print(f"Smoothing method: {smooth_method}, window: {smooth_window}, alpha: {smooth_alpha}")
+    if smooth_method == 'ema':
+        print(f"EMA history: {ema_history} frames, clamp multiplier: {ema_clamp_multiplier}")
+        if ema_clamp_absolute_max is not None:
+            print(f"EMA absolute max: {ema_clamp_absolute_max}")
 
     # Offscreen renderer
     visualize_hcgif = True
-    visualize_depth = False
+    visualize_depth = True
     angle = 180
     w, h = 800, 600
     render_interval = 2
-    render = o3d.visualization.rendering.OffscreenRenderer(w, h)
-    render.scene.set_background([0, 0, 0, 1])
-    set_render_camera = False # render cam (the third viewpoint)
 
-    # materials
-    human_mat = o3d.visualization.rendering.MaterialRecord()
-    human_mat.shader = "defaultLit"
-    cam_mat = o3d.visualization.rendering.MaterialRecord()
-    cam_mat.shader = "unlitLine"
+    if visualize_hcgif:
+        try:
+            print("[Info] Initializing OSMesa/headless renderer...")
+            render = o3d.visualization.rendering.OffscreenRenderer(w, h)
+            render.scene.set_background([0, 0, 0, 1])
+            set_render_camera = False # render cam (the third viewpoint)
+            print("[Info] OSMesa renderer initialized successfully")
+        except Exception as e:
+            print(f"[Error] Failed to initialize OSMesa renderer: {e}")
+            print("[Error] Please ensure OSMesa is installed: sudo apt-get install libosmesa6-dev")
+            raise
+        
+        # materials
+        human_mat = o3d.visualization.rendering.MaterialRecord()
+        human_mat.shader = "defaultLit"
+        cam_mat = o3d.visualization.rendering.MaterialRecord()
+        cam_mat.shader = "unlitLine"
     
     # start looping the video seq
     while True:
@@ -525,8 +635,10 @@ if __name__=='__main__':
         timestamp, img = dataset[i] # the original size, 0-1 scale
         img_cv2 = dataset.read_img(i) # the original size, 0-255 scale
 
+        depth_img = img.copy()
         # SAM mask
         boxes_np = None
+        human_mask = None  # Store mask for confidence masking in flow space
 
         with torch.no_grad():
             with autocast('cuda'):
@@ -548,9 +660,47 @@ if __name__=='__main__':
                 )
             masks = masks.detach().cpu().squeeze(1)  # (N, H, W)
             human_mask = (masks.sum(dim=0) > 0).numpy()  # (H, W) bool
+
+            hard_human_mask = human_mask.copy()
             if human_mask.any():
-                # img is float [0,1], HxWx3; zero-out human regions
-                img[human_mask] = 0.0
+                # Process mask to create soft margin
+                if args.mask_method != 'none':
+                    soft_mask = process_mask_soft_margin(
+                        human_mask,
+                        method=args.mask_method,
+                        kernel_size=args.mask_kernel_size,
+                        sigma=args.mask_sigma,
+                        dilation_iterations=args.mask_dilation_iterations
+                    )
+                    # Apply soft mask: multiply image by (1 - soft_mask) to gradually fade out human regions
+                    # soft_mask is [0,1] where 1 is human region, so (1 - soft_mask) is background weight
+                    img = img * (1.0 - soft_mask[..., np.newaxis])  # Add channel dimension for broadcasting
+                    # Store soft_mask for confidence masking (use soft_mask instead of binary mask)
+                    human_mask = soft_mask
+
+                    # if i==29:
+                    #     mask = human_mask.detach().cpu().numpy()
+                    #     img_np = img.detach().cpu().numpy() if hasattr(img, 'detach') else img
+
+                    #     # 归一化到 0-1 区间（如果是 0–255 图像）
+                    #     if img_np.max() > 1.5:
+                    #         img_np = img_np / 255.0
+
+                    #     overlay_color = np.array([0.0, 0.0, 0.0])
+
+                    #     # mask[..., None] 扩展为 3 通道，以便广播计算
+                    #     # 透明度 α = mask 值（0→透明, 1→完全红）
+                    #     overlay = img_np * (1 - mask[..., None]) + overlay_color * mask[..., None]
+
+                    #     plt.imshow(overlay)
+                    #     plt.axis('off')
+                    #     plt.title("Soft Mask Overlay (with Transparency)")
+                    #     plt.savefig("soft_mask_overlay.png", bbox_inches='tight', pad_inches=0)
+                    #     plt.close()
+                    #     breakpoint()
+                else:
+                    # Hard mask: zero-out human regions directly
+                    img[human_mask] = 0.0
 
         if save_frames:
             frames.append(img)
@@ -595,13 +745,101 @@ if __name__=='__main__':
                 
                 # Filter valid depths (remove invalid/negative depths)
                 valid_mask = depths > 0
+                # metric scale depth
+                depth_input_img = torch.tensor(depth_img).permute(2, 0, 1) # 3, 960, 720
+                metric_depth = metric_depth_model.infer(depth_input_img)["depth"]
+
+                valid_depths = depths[valid_mask]
+                print(f"debug -- before human mask scaler: {metric_depth.min() / valid_depths.min()}")
+                
+                # Also remove human region from SLAM depths
+                if hard_human_mask is not None and hard_human_mask.any():
+                    mask_h, mask_w = hard_human_mask.shape
+                    depth_h, depth_w = img_shape[0], img_shape[1]
+                    
+                    if mask_h != depth_h or mask_w != depth_w:
+                        mask_torch = torch.from_numpy(hard_human_mask).float().unsqueeze(0).unsqueeze(0)
+                        mask_resized = F.interpolate(
+                            mask_torch,
+                            size=(depth_h, depth_w),
+                            mode='bilinear',
+                            align_corners=False
+                        ).squeeze(0).squeeze(0)
+                        human_mask_resized = mask_resized.cpu().numpy() > mask_thres
+                    else:
+                        # Same size, just convert to bool if needed
+                        human_mask_resized = hard_human_mask > mask_thres if hard_human_mask.dtype == bool else hard_human_mask > mask_thres
+                    
+                    # Flatten the mask to match depths shape
+                    human_mask_flat = human_mask_resized.flatten()
+
+                    # TODO(yiwen) to see weather applying the human mask make a real difference
+                    # breakpoint()
+                    
+                    # Exclude human regions from valid_mask
+                    valid_mask = valid_mask & (~human_mask_flat)
+                
                 valid_depths = depths[valid_mask]
                 valid_confs = confidences[valid_mask]
+                
+                # Remove human region from metric depth before computing min
+                if hard_human_mask is not None and hard_human_mask.any():
+                    # Ensure metric_depth is 2D (H, W)
+                    if metric_depth.dim() > 2:
+                        metric_depth_2d = metric_depth.squeeze()
+                    else:
+                        metric_depth_2d = metric_depth
+                    
+                    # Convert human_mask to same shape and type as metric_depth
+                    if isinstance(hard_human_mask, np.ndarray):
+                        # human mask and metric_depth are all in original image size
+                        mask_h, mask_w = hard_human_mask.shape
+                        metric_h, metric_w = metric_depth_2d.shape
 
-                # metric scale depth
-                depth_input_img = torch.tensor(img).permute(2, 0, 1) # 3, 960, 720
-                metric_depth = metric_depth_model.infer(depth_input_img)["depth"]
-                naive_scaler = metric_depth.min() / valid_depths.min()
+                        if mask_h != metric_h or mask_w != metric_w:
+                            # Resize mask to match metric_depth dimensions
+                            mask_torch = torch.from_numpy(hard_human_mask).float().unsqueeze(0).unsqueeze(0)
+                            mask_resized = F.interpolate(
+                                mask_torch,
+                                size=(metric_h, metric_w),
+                                mode='bilinear',
+                                align_corners=False
+                            ).squeeze(0).squeeze(0)
+                            human_mask_resized = mask_resized.cpu().numpy() > mask_thres
+                        else:
+                            human_mask_resized = hard_human_mask > mask_thres if hard_human_mask.dtype == bool else hard_human_mask > mask_thres
+                        
+                        # Mask out human regions: set to a large value so they're ignored in min()
+                        if isinstance(metric_depth_2d, torch.Tensor):
+                            metric_depth_masked = metric_depth_2d.clone().cpu().numpy()
+                        else:
+                            metric_depth_masked = metric_depth_2d.copy()
+                        metric_depth_masked[human_mask_resized] = np.inf
+                        # breakpoint()
+                        valid_metric_depths = metric_depth_masked[metric_depth_masked != np.inf]
+                        if len(valid_metric_depths) > 0:
+                            metric_depth_min = np.min(valid_metric_depths)
+                        else:
+                            # Fallback: if all values are masked, use original min
+                            metric_depth_min = metric_depth.min().item() if isinstance(metric_depth, torch.Tensor) else metric_depth.min()
+                    else:
+                        # If mask is not available or empty, use original min
+                        metric_depth_min = metric_depth.min().item() if isinstance(metric_depth, torch.Tensor) else metric_depth.min()
+                else:
+                    # No human mask, use original min
+                    metric_depth_min = metric_depth.min().item() if isinstance(metric_depth, torch.Tensor) else metric_depth.min()
+                
+
+                if len(metric_depth) > 0:
+                    if visualize_depth and (i % 10 == 0):  # Save every 10th frame
+                        metric_depth_normalized = (metric_depth - metric_depth.min()) / (metric_depth.max() - metric_depth.min())
+                        metric_depth_normalized = metric_depth_normalized.detach().cpu().numpy()
+                        metric_depth_uint8 = (metric_depth_normalized * 255).astype(np.uint8)
+                        cv2.imwrite(f"mdepth_frame_{i:06d}.png", metric_depth_uint8)
+
+                naive_scaler = metric_depth_min / valid_depths.min()
+                print(f"debug -- after human mask scaler: {naive_scaler}")
+
                 """
                 slam depth * scale = pred depth
 
@@ -609,6 +847,7 @@ if __name__=='__main__':
                 pred_cam_q = torch.tensor(traj[:, 3:])
                 """
                 
+                # visualization of the SLAM depth
                 if len(valid_depths) > 0:
                     if visualize_depth and (i % 10 == 0):  # Save every 10th frame
                         depth_normalized = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
@@ -630,7 +869,35 @@ if __name__=='__main__':
                 img_shape = frame.img_shape.flatten()[:2].cpu().numpy()
                 depth_map = depths.reshape(img_shape[0], img_shape[1])
                 
+                # Filter valid depths (remove invalid/negative depths)
                 valid_mask = depths > 0
+                
+                # Also remove human region from valid depths
+                if human_mask is not None and human_mask.any():
+                    # Resize human_mask to match depth_map dimensions if needed
+                    mask_h, mask_w = human_mask.shape
+                    depth_h, depth_w = img_shape[0], img_shape[1]
+                    
+                    if mask_h != depth_h or mask_w != depth_w:
+                        # Resize mask to match depth_map dimensions
+                        mask_torch = torch.from_numpy(human_mask).float().unsqueeze(0).unsqueeze(0)
+                        mask_resized = F.interpolate(
+                            mask_torch,
+                            size=(depth_h, depth_w),
+                            mode='bilinear',
+                            align_corners=False
+                        ).squeeze(0).squeeze(0)
+                        human_mask_resized = mask_resized.cpu().numpy() > mask_thres
+                    else:
+                        # Same size, just convert to bool if needed
+                        human_mask_resized = human_mask > mask_thres if human_mask.dtype == bool else human_mask > mask_thres
+                    
+                    # Flatten the mask to match depths shape
+                    human_mask_flat = human_mask_resized.flatten()
+                    
+                    # Exclude human regions from valid_mask
+                    valid_mask = valid_mask & (~human_mask_flat)
+                
                 valid_depths = depths[valid_mask]
                 
                 if len(valid_depths) > 0:
@@ -660,39 +927,103 @@ if __name__=='__main__':
                 # No smoothing, use raw tracking result
                 x_smooth, y_smooth, z_smooth = x, y, z
                 qx_smooth, qy_smooth, qz_smooth, qw_smooth = qx, qy, qz, qw
-            elif smooth_method == 'moving_avg':
-                # Moving average smoothing
-                pose_buffer.append((t, x, y, z, qx, qy, qz, qw))
-                if len(pose_buffer) >= 2:
-                    # Average translation
-                    x_smooth = np.mean([p[1] for p in pose_buffer])
-                    y_smooth = np.mean([p[2] for p in pose_buffer])
-                    z_smooth = np.mean([p[3] for p in pose_buffer])
-                    
-                    # Average rotation (using quaternion averaging)
-                    quats = np.array([[p[4], p[5], p[6], p[7]] for p in pose_buffer])
-                    # Normalize quaternions
-                    quats = quats / np.linalg.norm(quats, axis=1, keepdims=True)
-                    # Simple average (better would be SLERP, but this is faster)
-                    q_avg = np.mean(quats, axis=0)
-                    q_avg = q_avg / np.linalg.norm(q_avg)
-                    qx_smooth, qy_smooth, qz_smooth, qw_smooth = q_avg
-                else:
-                    # Not enough samples yet, use current
-                    x_smooth, y_smooth, z_smooth = x, y, z
-                    qx_smooth, qy_smooth, qz_smooth, qw_smooth = qx, qy, qz, qw
+
             elif smooth_method == 'ema':
-                # Exponential moving average
-                if smoothed_pose is None:
-                    smoothed_pose = (x, y, z, qx, qy, qz, qw)
+                # Exponential moving average with history-weighted smoothing and velocity-based clamping
+                ema_history_buffer.append((x, y, z))
+                
+                if len(ema_history_buffer) < 2:
+                    # Not enough history yet, use current pose
                     x_smooth, y_smooth, z_smooth = x, y, z
                     qx_smooth, qy_smooth, qz_smooth, qw_smooth = qx, qy, qz, qw
+                    smoothed_pose = (x_smooth, y_smooth, z_smooth, qx_smooth, qy_smooth, qz_smooth, qw_smooth)
                 else:
-                    # EMA for translation
-                    x_smooth = smooth_alpha * x + (1 - smooth_alpha) * smoothed_pose[0]
-                    y_smooth = smooth_alpha * y + (1 - smooth_alpha) * smoothed_pose[1]
-                    z_smooth = smooth_alpha * z + (1 - smooth_alpha) * smoothed_pose[2]
+                    # Estimate velocity from history (average velocity over recent frames)
+                    history_list = list(ema_history_buffer)
+                    velocities = []
+                    for j in range(1, len(history_list)):
+                        dx = history_list[j][0] - history_list[j-1][0]
+                        dy = history_list[j][1] - history_list[j-1][1]
+                        dz = history_list[j][2] - history_list[j-1][2]
+                        velocities.append(np.array([dx, dy, dz]))
                     
+                    if len(velocities) > 0:
+                        # Compute velocity magnitudes
+                        velocity_magnitudes = np.array([np.linalg.norm(v) for v in velocities])
+                        
+                        # Choose statistical measure based on clamp mode (more conservative = stricter)
+                        base_velocity = np.median(velocity_magnitudes)  # Default to median
+                        
+                        # Clamp threshold based on velocity
+                        clamp_threshold = base_velocity * ema_clamp_multiplier
+                        
+                        # Apply absolute maximum if specified (additional hard limit)
+                        if ema_clamp_absolute_max is not None:
+                            clamp_threshold = min(clamp_threshold, ema_clamp_absolute_max)
+                        
+                        # Additional statistics for debugging
+                        avg_velocity = np.mean(velocity_magnitudes)
+                        max_velocity = np.max(velocity_magnitudes)
+                        median_velocity = np.median(velocity_magnitudes)
+                        
+                        # Print velocity statistics periodically (every 30 frames)
+                        if i % 30 == 0:
+                            print(f"[EMA Stats] Frame {i}: Base={base_velocity:.6f}, "
+                                  f"Mean={avg_velocity:.6f}, Median={median_velocity:.6f}, Max={max_velocity:.6f}")
+                            print(f"  Clamp threshold={clamp_threshold:.6f} (multiplier={ema_clamp_multiplier})")
+                            if ema_clamp_absolute_max is not None:
+                                print(f"  Absolute max limit={ema_clamp_absolute_max:.6f}")
+                            print(f"  Note: If too many outliers are NOT clamped, REDUCE multiplier or use more conservative mode.")
+                    else:
+                        clamp_threshold = float('inf')  # No clamp if no velocity estimate
+                        if ema_clamp_absolute_max is not None:
+                            clamp_threshold = ema_clamp_absolute_max  # Use absolute max if available
+                    
+                    # History-weighted EMA: configurable weight distribution
+                    n_history = len(ema_history_buffer)
+                    
+                    weights = np.array([(1 - smooth_alpha) ** (n_history - 1 - i) for i in range(n_history)])
+                    weights = weights / weights.sum()  # Normalize
+                    
+                    # Weighted average of translation
+                    x_weighted = sum(w * p[0] for w, p in zip(weights, ema_history_buffer))
+                    y_weighted = sum(w * p[1] for w, p in zip(weights, ema_history_buffer))
+                    z_weighted = sum(w * p[2] for w, p in zip(weights, ema_history_buffer))
+                    
+                    # Compute update from current measurement
+                    x_update = x - x_weighted
+                    y_update = y - y_weighted
+                    z_update = z - z_weighted
+                    update_norm = np.linalg.norm([x_update, y_update, z_update])
+                    
+                    # Clamp update if it exceeds threshold
+                    was_clamped = False
+                    if update_norm > clamp_threshold and clamp_threshold > 0:
+                        was_clamped = True
+                        scale = clamp_threshold / update_norm
+                        x_update_orig = x_update
+                        y_update_orig = y_update
+                        z_update_orig = z_update
+                        x_update *= scale
+                        y_update *= scale
+                        z_update *= scale
+                        
+                        # Print clamp information
+                        exceed_ratio = update_norm / clamp_threshold if clamp_threshold > 0 else float('inf')
+                        print(f"[EMA Clamp] Frame {i}: Update clamped! (exceeded by {exceed_ratio:.2f}x)")
+                        # print(f"  Base velocity: {base_velocity:.6f}, Threshold: {clamp_threshold:.6f}")
+                        # print(f"  Update norm: {update_norm:.6f} (exceeded by {update_norm - clamp_threshold:.6f})")
+                        # print(f"  Original update: [{x_update_orig:.6f}, {y_update_orig:.6f}, {z_update_orig:.6f}]")
+                        # print(f"  Clamped update:  [{x_update:.6f}, {y_update:.6f}, {z_update:.6f}]")
+                        print(f"  Scale factor: {scale:.4f} (clamped to {scale*100:.1f}% of original)")
+                    
+                    # Apply clamped update
+                    x_smooth = x_weighted + smooth_alpha * x_update
+                    y_smooth = y_weighted + smooth_alpha * y_update
+                    z_smooth = z_weighted + smooth_alpha * z_update
+                    
+                    # Rotation: use current (no smoothing for now)
+                    # qx_smooth, qy_smooth, qz_smooth, qw_smooth = qx, qy, qz, qw
                     # EMA for rotation (quaternion SLERP approximation)
                     q_prev = np.array([smoothed_pose[3], smoothed_pose[4], smoothed_pose[5], smoothed_pose[6]])
                     q_curr = np.array([qx, qy, qz, qw])
@@ -707,90 +1038,21 @@ if __name__=='__main__':
                     q_smooth = q_smooth / np.linalg.norm(q_smooth)
                     qx_smooth, qy_smooth, qz_smooth, qw_smooth = q_smooth
                     
+                    # smoothed_pose = (x_smooth, y_smooth, z_smooth, qx, qy, qz, qw)
                     smoothed_pose = (x_smooth, y_smooth, z_smooth, qx_smooth, qy_smooth, qz_smooth, qw_smooth)
-            else:  # kalman filter (simplified implementation)
-                # Simplified Kalman filter for camera pose smoothing
-                # Note: Full Kalman filter for SE(3) would require EKF/UKF on manifolds
-                # This is a simplified version that filters translation with constant velocity model
-                # and uses EMA for rotation (quaternion space is non-linear)
-                
-                dt = 1.0  # Assume constant frame rate (could use actual timestamps)
-                
-                # Process noise (how much we expect the state to change)
-                Q_pos = 0.01  # Position process noise
-                Q_vel = 0.1   # Velocity process noise
-                
-                # Measurement noise (how much we trust the measurements)
-                R = 0.1  # Measurement noise
-                
-                if kalman_state is None:
-                    # Initialize: position from measurement, velocity = 0
-                    kalman_state = np.array([x, y, z, 0.0, 0.0, 0.0])  # [x, y, z, vx, vy, vz]
-                    kalman_P = np.eye(6) * 1.0  # Initial covariance
-                    x_smooth, y_smooth, z_smooth = x, y, z
-                    qx_smooth, qy_smooth, qz_smooth, qw_smooth = qx, qy, qz, qw
-                else:
-                    # State transition matrix (constant velocity model)
-                    # x_new = x_old + v * dt
-                    # v_new = v_old (constant velocity)
-                    F = np.array([
-                        [1, 0, 0, dt, 0, 0],
-                        [0, 1, 0, 0, dt, 0],
-                        [0, 0, 1, 0, 0, dt],
-                        [0, 0, 0, 1, 0, 0],
-                        [0, 0, 0, 0, 1, 0],
-                        [0, 0, 0, 0, 0, 1]
-                    ])
-                    
-                    # Process noise matrix
-                    Q = np.eye(6)
-                    Q[0, 0] = Q[1, 1] = Q[2, 2] = Q_pos * dt**2
-                    Q[3, 3] = Q[4, 4] = Q[5, 5] = Q_vel * dt
-                    
-                    # Measurement matrix (we observe position directly)
-                    H = np.array([
-                        [1, 0, 0, 0, 0, 0],
-                        [0, 1, 0, 0, 0, 0],
-                        [0, 0, 1, 0, 0, 0]
-                    ])
-                    
-                    # Measurement
-                    z = np.array([x, y, z])
-                    
-                    # Prediction step
-                    kalman_state = F @ kalman_state
-                    kalman_P = F @ kalman_P @ F.T + Q
-                    
-                    # Update step
-                    y = z - H @ kalman_state  # Innovation
-                    S = H @ kalman_P @ H.T + R * np.eye(3)  # Innovation covariance
-                    K = kalman_P @ H.T @ np.linalg.inv(S)  # Kalman gain
-                    
-                    kalman_state = kalman_state + K @ y
-                    kalman_P = (np.eye(6) - K @ H) @ kalman_P
-                    
-                    # Use filtered position
-                    x_smooth, y_smooth, z_smooth = kalman_state[:3]
-                    
-                    # For rotation, use EMA (quaternion space is non-linear, would need EKF/UKF)
-                    if smoothed_pose is None:
-                        smoothed_pose = (x, y, z, qx, qy, qz, qw)
-                        qx_smooth, qy_smooth, qz_smooth, qw_smooth = qx, qy, qz, qw
-                    else:
-                        q_prev = np.array([smoothed_pose[3], smoothed_pose[4], smoothed_pose[5], smoothed_pose[6]])
-                        q_curr = np.array([qx, qy, qz, qw])
-                        q_prev = q_prev / np.linalg.norm(q_prev)
-                        q_curr = q_curr / np.linalg.norm(q_curr)
-                        if np.dot(q_prev, q_curr) < 0:
-                            q_curr = -q_curr
-                        q_smooth = 0.3 * q_prev + 0.7 * q_curr  # EMA for rotation
-                        q_smooth = q_smooth / np.linalg.norm(q_smooth)
-                        qx_smooth, qy_smooth, qz_smooth, qw_smooth = q_smooth
-                        smoothed_pose = (x_smooth, y_smooth, z_smooth, qx_smooth, qy_smooth, qz_smooth, qw_smooth)
-            
+
             with open(traj_file, "a") as f:  # append
                 f.write(f"{naive_scaler} {x_smooth} {y_smooth} {z_smooth} {qx_smooth} {qy_smooth} {qz_smooth} {qw_smooth}\n")
                 # f.write(f"{t} {x_smooth} {y_smooth} {z_smooth} {qx_smooth} {qy_smooth} {qz_smooth} {qw_smooth}\n")
+            
+            # Update SLAM internal pose with smoothed pose if requested
+            if args.update_slam_pose and smooth_method != 'none':
+                # Convert smoothed pose back to Sim3 format
+                t_smooth = np.array([x_smooth, y_smooth, z_smooth])
+                q_smooth = np.array([qx_smooth, qy_smooth, qz_smooth, qw_smooth])
+                frame.T_WC = quaternion_translation_to_Sim3(t_smooth, q_smooth, device)
+                # Also update the frame in states
+                states.set_frame(frame)
         
         # save key frame results
         if add_new_kf:
@@ -869,8 +1131,9 @@ if __name__=='__main__':
         if i==0:
             fix_scaler = naive_scaler
         # world coord camera trajectory
-        current_camt = torch.tensor([fix_scaler*x, fix_scaler*y, fix_scaler*z]).unsqueeze(0)
-        current_camq = torch.tensor([qw, qx, qy, qz]).unsqueeze(0)
+        current_camt = torch.tensor([fix_scaler*x_smooth, fix_scaler*y_smooth, fix_scaler*z_smooth]).unsqueeze(0)
+        # current_camt = torch.tensor([fix_scaler*x, fix_scaler*y, fix_scaler*z]).unsqueeze(0)
+        current_camq = torch.tensor([qw_smooth, qx_smooth, qy_smooth, qz_smooth]).unsqueeze(0)
 
         current_camr = quaternion_to_matrix(current_camq)
 
@@ -882,7 +1145,7 @@ if __name__=='__main__':
                                 global_orient=frame_results['pred_rotmat'][:,[0]], 
                                 betas=frame_results['pred_shape'], 
                                 transl=frame_results['pred_trans'].squeeze(1),
-                                pose2rot=False, 
+                                pose2rot=False,
                                 default_smpl=True)
         pred_vert = pred.vertices
         pred_j3d = pred.joints[:, :24]
@@ -1022,6 +1285,7 @@ if __name__=='__main__':
         del viz2main
     del manager    
     torch.cuda.empty_cache()
-    del render
+    if visualize_hcgif:
+        del render
     
     print(f"Sequence {root} completed and cleaned up")

@@ -14,8 +14,8 @@ from os.path import join
 # ---- emdb
 
 # Please change these two lines for your directories
-ROOT = '/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/datasets'
-DATASET_NPZ_PATH = '/ocean/projects/cis240055p/yzhao16/Video-OnlineHMR/datasets/dataset_ann'
+ROOT = './datasets'
+DATASET_NPZ_PATH = './datasets'
 
 H36M_ROOT         = join(ROOT, 'h36m')
 PW3D_ROOT         = join(ROOT, '3dpw')
@@ -24,13 +24,13 @@ EMDB_ROOT         = join(ROOT, 'emdb')
 
 # Path to test/train npz files
 DATASET_FILES = [ {
-                   'emdb_1': join(DATASET_NPZ_PATH , 'emdb_1.npz'),
-                   '3dpw_vid_test': join(DATASET_NPZ_PATH , '3dpw_vid_test.npz'),
+                   'emdb_1': join(EMDB_ROOT , 'emdb_1.npz'),
+                   '3dpw_vid_test': join(PW3D_ROOT , '3dpw_vid_test.npz'),
                   },
 
                   {
-                   '3dpw_vid': join(DATASET_NPZ_PATH , '3dpw_vid_train.npz'),
-                   'h36m_vid': join(DATASET_NPZ_PATH , 'h36m_train.npz'),
+                   '3dpw_vid': join(PW3D_ROOT , '3dpw_vid_train.npz'),
+                   'h36m_vid': join(H36M_ROOT , 'h36m_train.npz'),
                    'bedlam_vid': join(DATASET_NPZ_PATH , 'bedlam_vid.npz'),
                   }
                 ]

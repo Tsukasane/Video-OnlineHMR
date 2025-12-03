@@ -21,21 +21,21 @@ def plot_spectrogram(motion_ts, sr=30, save_name="mspec.png", align_interpolate=
     
     seqlen = motion_ts.shape[0]
 
-    n_fft = 8 #int(sr * 1)   # 1 second window size
-    hop_length = 4 #n_fft // 4  # 75% overlap
+    n_fft = 128 #int(sr * 1)   # 1 second window size
+    hop_length =32 #n_fft // 4  # 75% overlap
 
     if y.ndim == 1:
         y = y.unsqueeze(0)  # [1, samples]
 
-    window = torch.hann_window(n_fft).to(device) # cpu-->gpu
+    # NOTE has complex number, more stable on CPU
+    window = torch.hann_window(n_fft)
     transform = torchaudio.transforms.Spectrogram(
         n_fft=n_fft,
         hop_length=hop_length,
         power=None,
         window_fn=lambda n_fft: window
     )
-
-    D = transform(y)  # [channel, freq, time]
+    D = transform(y.cpu())
     amplitude_raw = torch.abs(D)
 
     if align_interpolate:
@@ -54,8 +54,10 @@ def plot_spectrogram(motion_ts, sr=30, save_name="mspec.png", align_interpolate=
 
 def plot_amplitude(amplitude, save_name):
     plt.figure(figsize=(10, 4))
-    plt.imshow(amplitude.cpu(), origin='lower', aspect='auto', cmap='nipy_spectral')
-    plt.colorbar(format='%+2.0f')
+    plt.imshow(amplitude.cpu(), origin='lower', aspect='auto', cmap='plasma') # cmap='nipy_spectral'
+    plt.colorbar(format='%.2f')
+    plt.xlabel("Frame")
+    plt.ylabel("Frequency Bin")
     plt.title('Motion Spectrogram')
     plt.tight_layout()
     plt.savefig(save_name)

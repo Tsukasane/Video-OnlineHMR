@@ -197,6 +197,16 @@ def vertice_loss(batch, valid_range=(0,2), batch_size=24):
         loss = torch.FloatTensor(1).fill_(0.).mean().to(device)
     return loss
 
+def beta_change_loss(batch, valid_range=(0,2), batch_size=24):
+    """punish the beta change along time"""
+    pred_betas = batch['pred_betas']# 72, 10
+    pred_betas = pred_betas.reshape(batch_size, -1, 10) # 24, 16, 10
+
+    betas_t_diff = pred_betas[:,1:,...] - pred_betas[:,:-1,...] # (N-1, 24, 3) panilize sudden large action change
+    loss_betas_t = (betas_t_diff**2).sum()
+
+    return loss_betas_t
+    
 
 def cam_depth_loss(batch):
     # The last component is a loss that forces the network to predict positive depth values
@@ -261,7 +271,8 @@ def action_rate_l2_loss(batch, valid_range=(0,2), batch_size=24):
 
 collection = {'KPT2D': keypoint_loss, 'KPT3D': keypoint_3d_loss, 'SMPL':  smpl_losses,
               'CAM_S': cam_depth_loss, 'CAM': cam_loss, 'V3D': vertice_loss, 'ACCEL': acceleration_loss,
-              'SMPL_PLUS': smpl_losses_plus, 'ACTION_RATE_L2': action_rate_l2_loss,}
+              'SMPL_PLUS': smpl_losses_plus, 'ACTION_RATE_L2': action_rate_l2_loss,
+              'BETA_T': beta_change_loss}
 
 
 def compile_criterion(cfg):
@@ -286,7 +297,6 @@ class BaseLoss(torch.nn.Module):
         for t, w in self.weights.items():
             loss = self.functions[t](batch, valid_range, batch_size)
             mixes_loss += w * loss
-            # print(f"debug -- {t} loss: {loss}")
             losses[t] = loss.item()
 
         losses['mixed'] = mixes_loss.item()

@@ -5,15 +5,17 @@
 ```Bash TODO(yiwen) change this
 git clone --recursive https://github.com/yufu-wang/tram
 ```
+
 2. Creating a new anaconda environment.
 ```Bash
 conda create -n onlinetram python=3.11 cmake
 conda activate onlinetram
 pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+pip install -r requirements.txt
 cd thirdparty
 
 # Mast3r-SLAM installation (modified /scr/yiwenzh5/Video-OnlineHMR/thirdparty/MASt3R-SLAM/mast3r_slam/dataloader.py #L273, TODO switch to a local fork)
-git clone https://github.com/rmurai0610/MASt3R-SLAM.git --recursive
+# the current thirdparty/MASt3R-SLAM has the modified version involved --> need fork to a local branch and recursively clone git clone https://github.com/rmurai0610/MASt3R-SLAM.git --recursive
 cd MASt3R-SLAM/
 pip install -e thirdparty/mast3r
 pip install -e thirdparty/in3d
@@ -39,8 +41,31 @@ wget https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge
 wget https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_trainingfree.pth -P checkpoints/
 wget https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_codebook.pkl -P checkpoints/
 ```
-* MoGe-v2 --> ``./pretrain/mogev2_model.pt``
-* Segment-Anything --> ``./pretrain/sam_vit_h_4b8939.pth``
+```
+The pretrained models and templates are placed at:
+data/
+└── pretrain/
+    └── hmr2b/
+        └── epoch=35-step=1000000.ckpt
+    ├── camcalib_sa_biased_l2.ckpt
+    ├── cascade_mask_rcnn_vitdet_h_75ep.py
+    ├── DEVA-propagation.pth
+    ├── droid.pth
+    ├── mogev2_model.pt
+    ├── sam_vit_h_4b8939.pth
+    └── vimo_checkpoint.pth.tar
+└── smpl/
+    ├── downsample_mat.pkl
+    ├── J_regressor_extra.npy
+    ├── J_regressor_h36m.npy
+    ├── kintree_table.pkl
+    ├── SMPL_FEMALE.pkl
+    ├── SMPL_MALE.pkl
+    ├── smpl_mean_params.npz
+    └── SMPL_NEUTRAL.pkl
+└── colors.txt
+└── pascal_occluders.pkl
+```
 
 ## Prepare data
 Register at [SMPLify](https://smplify.is.tue.mpg.de) and [SMPL](https://smpl.is.tue.mpg.de), whose usernames and passwords will be used by our script to download the SMPL models. In addition, we will fetch trained checkpoints and an example video. Note that thirdparty models have their own licenses. 

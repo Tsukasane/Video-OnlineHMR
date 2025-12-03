@@ -253,9 +253,9 @@ class SMPLTransformerDecoderHead(nn.Module): # use the context from one image
         nn.init.xavier_uniform_(self.deccam.weight, gain=0.01)
 
         mean_params = np.load('./data/smpl/smpl_mean_params.npz')
-        init_body_pose = torch.from_numpy(mean_params['pose'].astype(np.float32)).unsqueeze(0)
-        init_betas = torch.from_numpy(mean_params['shape'].astype('float32')).unsqueeze(0)
-        init_cam = torch.from_numpy(mean_params['cam'].astype(np.float32)).unsqueeze(0)
+        init_body_pose = torch.tensor(mean_params['pose'], dtype=torch.float32).unsqueeze(0)
+        init_betas = torch.tensor(mean_params['shape'], dtype=torch.float32).unsqueeze(0)
+        init_cam = torch.tensor(mean_params['cam'], dtype=torch.float32).unsqueeze(0)
         self.register_buffer('init_body_pose', init_body_pose)
         self.register_buffer('init_betas', init_betas)
         self.register_buffer('init_cam', init_cam)

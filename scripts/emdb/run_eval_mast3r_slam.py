@@ -17,7 +17,7 @@ from lib.vis.traj import *
 from lib.camera.slam_utils import eval_slam
 
 """
-python ./scripts/emdb/run_eval_mast3r_slam.py --split 2 --human_rootdir ./to_daniel/human --camera_rootdir ./to_daniel/camera
+python ./scripts/emdb/run_eval_mast3r_slam.py --split 2 --human_rootdir ./res_human_camera --camera_rootdir ./hard_mask/camera
 """
 
 failed_seqs = []
