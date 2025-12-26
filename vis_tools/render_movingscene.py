@@ -130,8 +130,8 @@ def render_scene_with_cameras(ply_file, pose_file, out_gif="scene.gif"):
 
 
 if __name__ == "__main__":
-    cam_traj_path = "/ocean/projects/cis240055p/yzhao16/MASt3R-SLAM/logs/P0_09_outdoor_walk_video_incremental_kf.txt"
-    scene_ply_path = "/ocean/projects/cis240055p/yzhao16/MASt3R-SLAM/logs/P0_09_outdoor_walk_video.ply"
+    cam_traj_path = "./logs/P0_09_outdoor_walk_video_incremental_kf.txt"
+    scene_ply_path = "./logs/P0_09_outdoor_walk_video.ply"
     render_scene_with_cameras(scene_ply_path, cam_traj_path, "output_P0_09_incremental.gif")
 
 

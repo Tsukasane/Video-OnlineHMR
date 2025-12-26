@@ -28,7 +28,13 @@ mv data/smpl/smpl/smpl/models/basicmodel_m_lbs_10_207_0_v1.0.0.pkl data/smpl/SMP
 rm -rf data/smpl/smpl
 rm -rf data/smpl/smpl.zip
 
+# VIBE occlusion augmentation 
+gdown --fuzzy -O ./data/pascal_occluders.pkl https://drive.google.com/file/d/1_Qv9eAKVkfvZjdl9qaRyxVrIeAnAwevE/view?usp=sharing
+
 # Thirdparty checkpoints
+mkdir -p data/pretrain/hmr2b
+gdown --fuzzy -O ./data/pretrain/hmr2b/epoch=35-step=1000000.ckpt https://drive.google.com/file/d/1W4fcp8mwS19Rg_A7MoTS1lc7JafqTGu-/view?usp=sharing
+
 wget -P ./data/pretrain/ https://github.com/hkchengrex/Tracking-Anything-with-DEVA/releases/download/v1.0/DEVA-propagation.pth
 wget -P ./data/pretrain/ https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
 gdown --fuzzy -O ./data/pretrain/camcalib_sa_biased_l2.ckpt https://drive.google.com/file/d/1t4tO0OM5s8XDvAzPW-5HaOkQuV3dHBdO/view?usp=sharing
@@ -37,5 +43,6 @@ wget -P ./checkpoints/ https://download.europe.naverlabs.com/ComputerVision/MASt
 wget -P ./checkpoints/ https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_trainingfree.pth
 wget -P ./checkpoints/ https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_codebook.pkl
 
-# Our checkpoint and an example video
-# TODO(yiwen)
+# Our checkpoint
+mkdir -p ./results/onlinehmr
+gdown -O ./results/onlinehmr/checkpoint.pth.tar "https://drive.google.com/uc?id=1bbMhJyk9Qk5Ub01y7MJG5xFzRRkKB2Mm" 

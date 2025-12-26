@@ -5,10 +5,7 @@ Code adapted from: https://github.com/akanazawa/hmr/blob/master/src/benchmark/ev
 import torch
 import numpy as np
 from typing import Optional, Dict, List, Tuple
-
 from lib.core import constants
-
-
 from freq_motion import plot_spectrogram, plot_amplitude
 import pickle
 
@@ -38,7 +35,7 @@ def cal_spectrogram_similarity(gt_amp, pred_amp, alpha=0.5, eps=1e-8):
     corr_loss = (1.0 - corr) / 2.0   # 0..1, 0 best
     corr_pct = corr_loss * 100.0
 
-    print(f"debug -- mse_pct: {mse_pct}; corr_pct: {corr_pct}")
+    print(f"mse_pct: {mse_pct}; corr_pct: {corr_pct}")
 
 
 def compute_error_accel(joints_gt, joints_pred, vis=None):
@@ -219,10 +216,10 @@ class Evaluator:
         self.V6890_TO_V138_mat = pickle.load(open(constants.DOWNSAMPLE_MAT, 'rb')).to_dense()
         self.all_acc = []
 
-        self.valid_range = (1,1)
         self.chunk_size = 16
+        self.batch_t = 8
 
-        self.visualize_spec = True
+        self.visualize_spec = False
         self.visualize_verticesspec = False # false in emdb_1, true in 3dpw_test_vid
 
 
@@ -245,22 +242,14 @@ class Evaluator:
         gt_valid, pred_valid = self.get_valid_joints(gt_keypoints_3d, 
                                                      pred_keypoints_3d, 
                                                      dataset)
-        # # 48, 24, 3 --> 16, 24, 3 (T, J, 3) NOTE(yiwen) we do not change the validation bs
-        # gt_valid = select_valid(gt_valid, self.valid_range)
-        # pred_valid = select_valid(pred_valid, self.valid_range)
-        # TODO(yiwen) make it to args, only for debug now
-        use_train_pipeline_to_valid = True
-        batch_t = 8
-        if use_train_pipeline_to_valid:
-            gt_valid = select_valid(gt_valid, batch_t)
+
+        batch_t = self.batch_t
+        gt_valid = select_valid(gt_valid, batch_t)
 
         # NOTE(yiwen) fps=30
         if self.visualize_verticesspec: # one time for each validation pass
             self.V6890_TO_V138_mat = self.V6890_TO_V138_mat.to(gt_valid.device)
             # # gt_valid: B, 6890, 3
-            # gt_verts = select_valid(gt_verts, self.valid_range)
-            # pred_verts = select_valid(pred_verts, self.valid_range)
-
             gt_v138 = torch.matmul(self.V6890_TO_V138_mat, gt_verts) # 16, 6890, 3-->16, 138, 3
             pred_v138 = torch.matmul(self.V6890_TO_V138_mat, pred_verts)
             gt_amplitude = plot_spectrogram(gt_v138, sr=138*30, save_name="vis_138verticesGT3.png") # NOTE(yiwen) decide the sr
@@ -269,8 +258,6 @@ class Evaluator:
             plot_amplitude(gt_amplitude-pred_amplitude, save_name="gt-predvertices3.png")
             cal_spectrogram_similarity(gt_amplitude, pred_amplitude)
             self.visualize_verticesspec = False
-
-        # TODO(yiwen) seperate vertices according to different body parts
 
         # NOTE(yiwen) fps=30
         if self.visualize_spec: # one time for each validation pass
@@ -286,10 +273,9 @@ class Evaluator:
             cal_spectrogram_similarity(gt_amplitude, pred_amplitude)
             # cal_spectrogram_similarity(gtnoise_amplitude, pred_amplitude)
             self.visualize_spec = False
-        
-        breakpoint()
 
         batch_size = gt_valid.shape[0]
+
         # Compute joint errors
         mpjpe, re = eval_pose(pred_valid, gt_valid) # only pass current frame to eval pose
 
@@ -297,8 +283,7 @@ class Evaluator:
         self.re[self.counter:self.counter+batch_size] = re
 
         if gt_verts is not None and pred_verts is not None:
-            if use_train_pipeline_to_valid:
-                gt_verts = select_valid(gt_verts, batch_t)
+            gt_verts = select_valid(gt_verts, batch_t)
         
             pred_pelvis = pred_keypoints_3d[:,[1,2],:].mean(dim=1, keepdim=True).clone()
             pred_keypoints_3d = pred_keypoints_3d - pred_pelvis 
@@ -307,10 +292,8 @@ class Evaluator:
             self.pve[self.counter:self.counter+batch_size] = pve * 1000
 
         if self.seq_len is not None:
-            if use_train_pipeline_to_valid:
-                gt_keypoints_3d = select_valid(gt_keypoints_3d, batch_t)
-            # gt = gt_keypoints_3d.reshape(-1, self.seq_len, num_j, 3).cpu()
-            # pred = pred_keypoints_3d.reshape(-1, self.seq_len, num_j, 3).cpu()
+            gt_keypoints_3d = select_valid(gt_keypoints_3d, batch_t)
+            
             gt = gt_keypoints_3d.reshape(batch_t, -1, num_j, 3).cpu()
             pred = pred_keypoints_3d.reshape(batch_t, -1, num_j, 3).cpu()
             acc = 0 # NOTE(yiwen) originally calculate the acc error in each window
@@ -318,7 +301,7 @@ class Evaluator:
             for i in range(len(gt)):
                 acc += compute_error_accel(gt[i], pred[i]).mean() / len(gt)
             
-            self.acc[self.counter:self.counter+batch_size] = acc * 1000 #(30**2)
+            self.acc[self.counter:self.counter+batch_size] = acc * 1000
             
             jitter = 0
             jitter_gt = 0

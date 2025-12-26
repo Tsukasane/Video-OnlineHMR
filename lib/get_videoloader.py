@@ -11,34 +11,33 @@ def get_dataloaders(cfg=None):
     dataset_list = cfg.DATASET.LIST
     valid_set = cfg.DATASET.TEST
     partition = cfg.DATASET.PARTITION
-
-    train_seqlen = 16 # TODO(yiwen) make this to args
-    train_stride = train_seqlen
+    seqlen = cfg.DATASET.SEQ_LEN
     stride = cfg.DATASET.STRIDE
 
     test_bs = cfg.TEST.BATCH_SIZE
 
 
     print('Num of data loading workers:', num_workers)
-    print('Sequence length:', train_seqlen)
-    print('Sequence stride:', train_stride)
+    print('Sequence length:', seqlen)
+    print('Sequence stride:', stride)
 
     print('Datasets:', dataset_list)
     print('Partition:', partition)
     
+    # NOTE(yiwen) first chunk to non-overlapping windows here
     train = MixedVidDataset(dataset_list, partition, is_train=True, use_augmentation=True,
                             normalization=True, cropped=True, crop_size=crop_size,
-                            seqlen=train_seqlen, stride=train_stride) 
+                            seqlen=seqlen, stride=stride) 
                             # seqlen=stride should be batch_size+2, set the real batch_size=1
                             # then reshape the input to B, window_size=3, ...
                             # --> make sure the frames are from continous seqs
     train_loader = CheckpointDataLoader(train, shuffle=True, batch_size=train_bs, num_workers=num_workers)
     
     test = VideoDataset(valid_set, is_train=False, use_augmentation=False, 
-                    normalization=True, cropped=True, crop_size=crop_size, seqlen=16, stride=16) 
+                    normalization=True, cropped=True, crop_size=crop_size, seqlen=seqlen, stride=stride) 
     test_loader = DataLoader(test, batch_size=test_bs, shuffle=False, num_workers=num_workers)
 
-    # ----------- debug ----------- #
+    # ----------- debug (visualize cropped training data) ----------- #
     # import matplotlib.pyplot as plt
     # import torch
     # mean = torch.tensor([0.485, 0.456, 0.406]) # imagenet

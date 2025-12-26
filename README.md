@@ -37,7 +37,7 @@
 
 3. Prepare data and models
     
-    Register at [SMPLify](https://smplify.is.tue.mpg.de) and [SMPL](https://smpl.is.tue.mpg.de), whose usernames and passwords will be used by our script to download the SMPL models. TODO (yiwen) Run the following to fetch all models and checkpoints to `data/`. Thirdparty models include [MASt3r-SLAM checkpoints](https://github.com/rmurai0610/MASt3R-SLAM/tree/c3d0d5b67bf51d558d7640ff6032407f68041f92?tab=readme-ov-file#installation)
+    Register at [SMPLify](https://smplify.is.tue.mpg.de) and [SMPL](https://smpl.is.tue.mpg.de), whose usernames and passwords will be used by our script to download the SMPL models. TODO (yiwen) Run the following to fetch all models and checkpoints to `data/`. Thirdparty models include [MASt3r-SLAM checkpoints](https://github.com/rmurai0610/MASt3R-SLAM/tree/c3d0d5b67bf51d558d7640ff6032407f68041f92?tab=readme-ov-file#installation), [HMR2.0b checkpoints]().
     ```Bash
     bash scripts/download_models.sh
     ```
@@ -83,7 +83,6 @@
 * Reset ``ROOT`` and ``DATASET_NPZ_PATH`` in ``./data_config.py`` to your own folders.
 
 ## Run demo on videos
-
 ```bash
 # inference
 python ./scripts/emdb/run_custom.py --video <YOUR/VIDEO/PATH>.mp4 --no-viz --calib false
@@ -91,12 +90,14 @@ python ./scripts/emdb/run_custom.py --video <YOUR/VIDEO/PATH>.mp4 --no-viz --cal
 # visualization
 python visualize_viser.py --human_npz_path <HUMAN/NPZ/PATH>.npz --camera_path <CAMERA/TXT/PATH>.txt
 ```
+You can also use scripts under ``vis_tools/`` to check visualization in ``.gif`` format.
 
 ## Training
 ```Bash
 # Fine-tune a online camera coordinates HMR model based on HMR2.0
 python train.py --cfg configs/config_vimo.yaml
 ```
+The training log and output will be placed at ``./results``. Set ``self.visualize_spec=True`` in ``./lib/utils/pose_utils.py`` if you want to visualize the 3D joint spectrogram.
 
 ## Evaluation
 ```Bash

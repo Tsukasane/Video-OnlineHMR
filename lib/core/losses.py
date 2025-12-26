@@ -18,7 +18,7 @@ def select_valid(batch_tensor, batch_size): # max_cache=2
 
     return batch_tensor
 
-def keypoint_loss(batch, valid_range=(0,2), batch_size=24, openpose_weight=0., gt_weight=1.):
+def keypoint_loss(batch, batch_size=24, openpose_weight=0., gt_weight=1.):
     """ Compute 2D reprojection loss on the keypoints.
     The loss is weighted by the confidence.
     The available keypoints are different for each dataset.
@@ -39,7 +39,7 @@ def keypoint_loss(batch, valid_range=(0,2), batch_size=24, openpose_weight=0., g
     return loss
 
 
-def keypoint_3d_loss(batch, valid_range=(0,2), batch_size=24):
+def keypoint_3d_loss(batch, batch_size=24):
     """Compute 3D keypoint loss for the examples that 3D keypoint annotations are available.
     The loss is weighted by the confidence.
     """
@@ -126,7 +126,7 @@ def smpl_losses(batch, pose_weight=1., beta_weight=0.001):
     loss = pose_weight*loss_regr_pose + beta_weight*loss_regr_betas
     return loss
 
-def smpl_losses_plus(batch, valid_range=(0,2), batch_size=24, pose_weight=1., beta_weight=0.001, init_w=1.0):
+def smpl_losses_plus(batch, batch_size=24, pose_weight=1., beta_weight=0.001, init_w=1.0):
     pred_rotmat_0 = batch['pred_rotmat_0']
     pred_rotmat = batch['pred_rotmat']
     pred_betas  = batch['pred_betas']
@@ -158,7 +158,7 @@ def smpl_losses_plus(batch, valid_range=(0,2), batch_size=24, pose_weight=1., be
     # print(f'debug -- smpl loss plus {loss}')
     return loss
 
-def vertice_loss(batch, valid_range=(0,2), batch_size=24):
+def vertice_loss(batch, batch_size=24):
 
     pred_rotmat = batch['pred_rotmat'] # 72, 24, 3, 3
     pred_betas  = batch['pred_betas']# 72, 10
@@ -197,7 +197,7 @@ def vertice_loss(batch, valid_range=(0,2), batch_size=24):
         loss = torch.FloatTensor(1).fill_(0.).mean().to(device)
     return loss
 
-def beta_change_loss(batch, valid_range=(0,2), batch_size=24):
+def beta_change_loss(batch, batch_size=24):
     """punish the beta change along time"""
     pred_betas = batch['pred_betas']# 72, 10
     pred_betas = pred_betas.reshape(batch_size, -1, 10) # 24, 16, 10
@@ -234,7 +234,7 @@ def cam_loss(batch):
 
     return loss.clamp(min=None, max=10.0)
 
-def action_rate_l2_loss(batch, valid_range=(0,2), batch_size=24):
+def action_rate_l2_loss(batch, batch_size=24):
     """gt only used for conf"""
     pred_keypoints_3d = batch['pred_keypoints_3d'] # 72, 49, 3
     gt_keypoints_3d = batch['pose_3d'] # 72, 24, 4
@@ -290,12 +290,12 @@ class BaseLoss(torch.nn.Module):
         self.weights = {}
         self.functions = {}
 
-    def forward(self, batch, valid_range, batch_size):
+    def forward(self, batch, batch_size):
         losses = {}
         mixes_loss = 0
         
         for t, w in self.weights.items():
-            loss = self.functions[t](batch, valid_range, batch_size)
+            loss = self.functions[t](batch, batch_size)
             mixes_loss += w * loss
             losses[t] = loss.item()
 

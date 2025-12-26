@@ -18,6 +18,9 @@ from lib.models.casual_kvcache import SMPLDecoderModel
 autocast = torch.amp.autocast
 
 def select_valid(batch_tensor, batch_size):
+    """
+    Get only the last frame result in each window
+    """
     batch_tensor = batch_tensor.reshape(batch_size, -1, *batch_tensor.shape[1:])[:,2:,...]
     batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
 
@@ -54,7 +57,7 @@ class HMR_VIMO(nn.Module):
         self.inference_memory = None
 
 
-    def forward(self, batch, valid_range=(0,2), is_train=False, is_valid=False, **kwargs):
+    def forward(self, batch, is_train=False, is_valid=False, **kwargs):
         '''
         Args:
             - batch (dict)
@@ -63,7 +66,6 @@ class HMR_VIMO(nn.Module):
                 - batch['scale'] # B*T
                 - batch['img_focal'] # B*T
                 - batch['img_center'] # B*T, 2
-            - valid_range: is for prev, curr, future ablation
         Returns:
             - out (dict)
                 - rotmat_preds (list) element shape B*T, 24, 3, 3
@@ -82,29 +84,19 @@ class HMR_VIMO(nn.Module):
 
         batch_size = self.train_bs
 
-        # estimate focal length, and bbox 
-        bbox_info = self.bbox_est(center, scale, img_focal, img_center) # 128, 3
-
         # backbone 
         with autocast('cuda'):
             # B*N*T=2*24*3, 3, H, W --> BT, C=1280, h, w
             feature = self.backbone(image[:,:,:,32:-32]) # pass through vit
             feature = feature.float() # 128, 1280, w=16, h=12 NOTE(yiwen) image feature of each patch/frame
 
-        # frame level
-        bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12) 
-        # feature = torch.cat([feature, bb], dim=1) # B*3=48, 1283, 16, 12 NOTE(yiwen) image + human bbox --> if we don't use this bbox info
-
-        # patch level -->
+        # patch level
         feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only, use input in this shape to add spatial and temporal emcoding
     
-        #### add new
-        max_cache = self.max_memt * self.H * self.W
-        total_num = feature.shape[1]
         chunks = feature.unfold(dimension=1, size=self.max_memt+1, step=1)
         chunks = chunks.reshape(-1,*chunks.shape[2:]).permute(0,3,1,2) # B*N, window_length, h*w, D
-        q_token_raw = chunks[:,2:3,...] # current
-        img_feats_raw = chunks[:,0:2,...] # previous
+        q_token_raw = chunks[:,self.max_memt:self.max_memt+1,...] # current
+        img_feats_raw = chunks[:,0:self.max_memt,...] # previous
 
         new_bs = img_feats_raw.shape[0] # 336(24*(16-2)), 2, 192, 1280
         q_token2 = einops.rearrange(q_token_raw, 'b t (h w) c -> b (t h w) c', b=new_bs, h=self.H, w=self.W)
@@ -133,6 +125,7 @@ class HMR_VIMO(nn.Module):
         s_out = self.smpl.query(out)
         j3d = s_out.joints
         
+        # select info corresponds to the last frame in each window
         center = select_valid(center, batch_size)
         scale = select_valid(scale, batch_size)
         img_focal = select_valid(img_focal, batch_size)
@@ -151,9 +144,8 @@ class HMR_VIMO(nn.Module):
         
         return out, iter_preds
     
-    def inference_forward(self, batch, valid_range=(0,2), is_train=False, is_valid=False, device='cuda', cache=None, **kwargs): # emdb2 eval
+    def inference_forward(self, batch, is_train=False, is_valid=False, device='cuda', cache=None, **kwargs): # emdb2 eval
         '''
-        TODO(yiwen) cache 需要传到这个函数外边，self.backbone 每次只提一个image的feature
         T=1
         Args:
             - batch (dict)
@@ -162,7 +154,6 @@ class HMR_VIMO(nn.Module):
                 - batch['scale'] # B*T
                 - batch['img_focal'] # B*T
                 - batch['img_center'] # B*T, 2
-            - valid_range: is for prev, curr, future ablation
         Returns:
             - out (dict)
                 - rotmat_preds (list) element shape B*T, 24, 3, 3
@@ -180,26 +171,19 @@ class HMR_VIMO(nn.Module):
         img_center = batch['img_center'] # B*T, 2
 
         if is_train:
-            batch_size = self.train_bs # TODO(yiwen) pass through configs to function
+            batch_size = self.train_bs
         if is_valid:
             batch_size = self.valid_bs
         else:
             batch_size = 1
 
-        # estimate focal length, and bbox 
-        bbox_info = self.bbox_est(center, scale, img_focal, img_center) # 128, 3
-
         # backbone 
         with autocast('cuda'):
-            # B*N*T=2*24*3, 3, H, W --> BT, C=1280, h, w
+            # --> BT, C=1280, h, w
             feature = self.backbone(image[:,:,:,32:-32]) # pass through vit
-            feature = feature.float() # 128, 1280, w=16, h=12 NOTE(yiwen) image feature of each patch/frame
+            feature = feature.float() # image feature of each patch/frame
 
-        # frame level
-        bb = einops.repeat(bbox_info, 'b c -> b c h w', h=16, w=12) 
-        # feature = torch.cat([feature, bb], dim=1) # B*3=48, 1283, 16, 12 NOTE(yiwen) image + human bbox --> if we don't use this bbox info
-
-        # patch level -->
+        # patch level
         feature = einops.rearrange(feature, '(b t) c h w -> b t (h w) c', b=batch_size) # c=1280 image feature only
 
         if not is_train: # in inference / validation
@@ -209,7 +193,7 @@ class HMR_VIMO(nn.Module):
             for t in range(inference_seqlen):
                 
                 q_token_raw = feature[:,t:t+1,...]
-                new_bs = q_token_raw.shape[0] # 336(24*(16-2)), 2, 192, 1280
+                new_bs = q_token_raw.shape[0] # 336=(24*(16-2)), 2, 192, 1280
                 q_token2 = einops.rearrange(q_token_raw, 'b t (h w) c -> b (t h w) c', b=new_bs, h=self.H, w=self.W)
                 img_feats_raw = feature[:,t:t+1,...] # init
                 smpl_pose, smpl_shape, smpl_cam, cache = self.smpl_decoder.inference_step(img_feat_t=img_feats_raw, 
@@ -228,10 +212,7 @@ class HMR_VIMO(nn.Module):
         
         else: # only for training pipeline debug
 
-            #### add new
             print(f"debug -- valid using train pipeline")
-            max_cache = self.max_memt * self.H * self.W
-            total_num = feature.shape[1]
             chunks = feature.unfold(dimension=1, size=self.max_memt+1, step=1)
             chunks = chunks.reshape(-1,*chunks.shape[2:]).permute(0,3,1,2) # B*N, window_length, h*w, D
             q_token_raw = chunks[:,2:3,...] # current
@@ -254,10 +235,7 @@ class HMR_VIMO(nn.Module):
         cam_preds   = []
         j3d_preds = []
         j2d_preds = []
-
-        # s_out = self.smpl.query(out)
-        # j3d = s_out.joints
-    
+        
         if is_train or is_valid:
             out = {}
             out['pred_cam'] = select_valid(pred_cam, batch_size) # B*T, 3
@@ -266,7 +244,7 @@ class HMR_VIMO(nn.Module):
             out['pred_rotmat'] = rot6d_to_rotmat(out['pred_pose']).reshape(-1, 24, 3, 3)
             out['pred_rotmat_0'] = select_valid(pred_rotmat_0, batch_size)
 
-        else: # online inference with mast3r-slam
+        else: # online inference
             out = {}
             out['pred_cam'] = pred_cam # B*T, 3
             out['pred_pose'] = pred_pose # B*T, 144
@@ -274,18 +252,15 @@ class HMR_VIMO(nn.Module):
             out['pred_rotmat'] = rot6d_to_rotmat(out['pred_pose']).reshape(-1, 24, 3, 3)
             out['pred_rotmat_0'] = pred_rotmat_0
 
-        # breakpoint()
         s_out = self.smpl.query(out)
         j3d = s_out.joints
 
         if is_train or is_valid:
-            # print(f"debug -- in valid")
             center = select_valid(center, batch_size)
             scale = select_valid(scale, batch_size)
             img_focal = select_valid(img_focal, batch_size)
             img_center = select_valid(img_center, batch_size)
 
-        # if 16/16, then the first two frames in a seq may have relatively low performance due to the insufficient cache
         j2d = self.project(j3d, out['pred_cam'], center, scale, img_focal, img_center)
         rotmat_preds.append(out['pred_rotmat'].clone())
         shape_preds.append(out['pred_shape'].clone())
@@ -297,7 +272,7 @@ class HMR_VIMO(nn.Module):
         trans_full = self.get_trans(out['pred_cam'], center, scale, img_focal, img_center)
         out['trans_full'] = trans_full
 
-        return out, iter_preds, cache # TODO(yiwen) add return cache
+        return out, iter_preds, cache
     
 
     def inference_chunk_ar(self, imgfiles, boxes, img_focal, img_center, device='cuda', cache=None): # for vis
@@ -340,7 +315,7 @@ class HMR_VIMO(nn.Module):
         boxes = boxes[valid] # (129, 5)
 
         frame_chunks, boxes_chunks = parse_chunks(frame, boxes, min_len=3) # NOTE(yiwen) only segment if have missing tracking frames
-        # boxes_chunks[0].shape (129, 5) frame_chunks[0].shape (129,)
+
         if len(frame_chunks) == 0:
             return
 
@@ -353,7 +328,6 @@ class HMR_VIMO(nn.Module):
 
         for frame_ck, boxes_ck in zip(frame_chunks, boxes_chunks):
             img_ck = imgfiles[frame_ck]
-            # NOTE(yiwen) this chunk is only for all tracking results
             results = self.inference_chunk_ar(img_ck, boxes_ck, img_focal=img_focal, img_center=img_center)
 
             pred_cam.append(results['pred_cam'])
@@ -371,116 +345,7 @@ class HMR_VIMO(nn.Module):
                 'frame': torch.cat(frame)}
         
         return results
-
-
-    def inference(self, imgfiles, boxes, img_focal=None, img_center=None, valid=None, frame=None, device='cuda'):
-        '''
-        Args:
-            - imgfiles (List): image paths
-            - 
-        '''
-        nfile = len(imgfiles)
-        if valid is None:
-            valid = np.ones(nfile, dtype=bool)
-        if frame is None:
-            frame = np.arange(nfile)
-        
-        if isinstance(imgfiles, list):
-            imgfiles = np.array(imgfiles)
-
-        frame = frame[valid] # (129,)
-        boxes = boxes[valid] # (129, 5)
-
-        frame_chunks, boxes_chunks = parse_chunks(frame, boxes, min_len=3) # NOTE(yiwen) only segment if have missing tracking frames
-        # boxes_chunks[0].shape (129, 5) frame_chunks[0].shape (129,)
-        if len(frame_chunks) == 0:
-            return
-
-        pred_cam = []
-        pred_pose = []
-        pred_shape = []
-        pred_rotmat = []
-        pred_trans = []
-        frame = []
-
-        for frame_ck, boxes_ck in zip(frame_chunks, boxes_chunks):
-            img_ck = imgfiles[frame_ck]
-            results = self.inference_chunk(img_ck, boxes_ck, img_focal=img_focal, img_center=img_center)
-
-            pred_cam.append(results['pred_cam'])
-            pred_pose.append(results['pred_pose'])
-            pred_shape.append(results['pred_shape'])
-            pred_rotmat.append(results['pred_rotmat'])
-            pred_trans.append(results['pred_trans'])
-            frame.append(torch.tensor(frame_ck))
-
-        results = {'pred_cam': torch.cat(pred_cam),
-                'pred_pose': torch.cat(pred_pose),
-                'pred_shape': torch.cat(pred_shape),
-                'pred_rotmat': torch.cat(pred_rotmat),
-                'pred_trans': torch.cat(pred_trans),
-                'frame': torch.cat(frame)}
-        
-        return results
-
-
-    def inference_chunk(self, imgfiles, boxes, img_focal, img_center, device='cuda'):
-        db = TrackDataset(imgfiles, boxes, img_focal=img_focal, 
-                        img_center=img_center, normalization=True, dilate=1.2)
-
-        # Results
-        pred_cam = []
-        pred_pose = []
-        pred_shape = []
-        pred_rotmat = []
-        pred_trans = []
-
-        # To-do: efficient implementation with batch
-        items = []
-        for i in range(len(db)):
-
-            item = db[i] # dict
-            items.append(item)
-
-            if len(items) < self.seq_len: # 攒到seq_len 的长度
-                continue
-            elif len(items) == self.seq_len:
-                batch = default_collate(items)
-            else: # len(items) > self.seq_len
-                items.pop(0) # first in first out
-                batch = default_collate(items) # sliding window step=1
-
-            # each batch is a three-frames window
-            with torch.no_grad():
-                batch = {k: v.to(device) for k, v in batch.items() if type(v)==torch.Tensor}
-                # batch.keys() 'img', 'img_idx', 'scale', 'center', 'img_focal', 'img_center'
-                out, _ = self.forward(batch) 
-                # out.keys() 'pred_cam', 'pred_pose', 'pred_shape', 'pred_rotmat', 'pred_rotmat_0', 'trans_full'
-                
-                if out['pred_cam'].shape[0] == 3: # prev+curr+future
-                # NOTE(yiwen) we only use the estimation of current frame
-                    out = {k:v[1:-1] for k,v in out.items()}
-
-                elif out['pred_cam'].shape[0] == 2: # prev+curr
-                    out = {k:v[1:] for k,v in out.items()}
-
-            pred_cam.append(out['pred_cam'].cpu())
-            pred_pose.append(out['pred_pose'].cpu())
-            pred_shape.append(out['pred_shape'].cpu())
-            pred_rotmat.append(out['pred_rotmat'].cpu())
-            pred_trans.append(out['trans_full'].cpu())
-
-        results = {'pred_cam': torch.cat(pred_cam),
-                'pred_pose': torch.cat(pred_pose),
-                'pred_shape': torch.cat(pred_shape),
-                'pred_rotmat': torch.cat(pred_rotmat),
-                'pred_trans': torch.cat(pred_trans),
-                'img_focal': img_focal,
-                'img_center': img_center}
-        
-        return results
-
-
+    
     def project(self, points, pred_cam, center, scale, img_focal, img_center, return_full=False):
 
         trans_full = self.get_trans(pred_cam, center, scale, img_focal, img_center)

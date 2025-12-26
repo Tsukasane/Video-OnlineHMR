@@ -54,7 +54,6 @@ def load_camera_poses(txt_file, scale=0.2):
 
     depth_scaler = 1.0
     for l_id, line in enumerate(lines):
-        # print(f"debug -- l_id {l_id}")
         vals = list(map(float, line.strip().split()))
         if l_id == 0:
             depth_scaler = vals[0]

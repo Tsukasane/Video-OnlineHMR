@@ -18,8 +18,6 @@ class Trainer(BaseTrainer):
         update_iter = self.cfg.TRAIN.UPDATE_ITER
         crop_size = self.model.crop_size
 
-        self.valid_range = self.cfg.MODEL.VALID_RANGE # prev 0, curr 1, future 2
-
         for i, batch in enumerate(tqdm(self.train_loader, desc="Computing batch")): # how to ignore the train.invalid elements
 
             # 72, 24, 4     B*window_size, 24, 4'
@@ -37,7 +35,7 @@ class Trainer(BaseTrainer):
             batch['smpl'] = self.model.smpl
 
             # Forward pass
-            out, iter_preds = self.model(batch, self.valid_range, is_train=True, iters=update_iter)
+            out, iter_preds = self.model(batch, is_train=True, iters=update_iter)
             try:
                 batch['pred_rotmat_0'] = out['pred_rotmat_0'] # 72, 24, 3, 3
             except Exception:
@@ -58,7 +56,7 @@ class Trainer(BaseTrainer):
                 batch['pred_keypoints_3d'] = j3d_preds[j] # 72, 49, 3
                 batch['pred_keypoints_2d'] = (j2d_preds[j]-crop_size/2.) / (crop_size/2.) # 72, 49, 2
                 
-                loss_j, losses = self.criterion(batch, self.valid_range, train_bs)
+                loss_j, losses = self.criterion(batch, batch_size=train_bs)
                 loss += gamma**(N-j-1) * loss_j
                 
             loss *= self.cfg.TRAIN.LOSS_SCALE
@@ -125,8 +123,6 @@ class Trainer(BaseTrainer):
         device = self.device
         db = loader.dataset
         
-        self.valid_range = self.cfg.MODEL.VALID_RANGE
-       
         gt_vertices = None
         pred_vertices = None
 
@@ -189,7 +185,7 @@ class Trainer(BaseTrainer):
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation accel: {acc}")
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation pve: {pve}")
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation jitter: {jitter}")
-        logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation jitter: {jitter_gt}")
+        logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation jitter (gt): {jitter_gt}")
 
         self.writer.add_scalar(f"Validation/RE", re, self.global_step)
         self.writer.add_scalar(f"Validation/MPJPE", mpjpe, self.global_step)
