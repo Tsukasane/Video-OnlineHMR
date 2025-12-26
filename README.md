@@ -1,88 +1,75 @@
 # Video-based Online Human Mesh Recovery
 
 ## Installation
-1. Clone this repo with the `--recursive` flag.
-```Bash TODO(yiwen) change this
-git clone --recursive https://github.com/yufu-wang/tram
-```
+1. Clone this repo with the `--recursive` flag (Please follow the corresponding licenses of thirdparty models). 
+    ```Bash
+    git clone --recursive https://github.com/Tsukasane/Video-OnlineHMR.git
+    ```
 
 2. Creating a new anaconda environment.
-```Bash
-conda create -n onlinetram python=3.11 cmake
-conda activate onlinetram
-pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
-pip install -r requirements.txt
-cd thirdparty
+    ```Bash
+    # Base environment installation
+    conda create -n onlinehmr python=3.11 cmake
+    conda activate onlinehmr
+    pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+    pip install --no-build-isolation git+https://github.com/mattloper/chumpy.git
+    pip install -r requirements.txt
+    cd thirdparty
 
-# Mast3r-SLAM installation (modified /scr/yiwenzh5/Video-OnlineHMR/thirdparty/MASt3R-SLAM/mast3r_slam/dataloader.py #L273, TODO switch to a local fork)
-# the current thirdparty/MASt3R-SLAM has the modified version involved --> need fork to a local branch and recursively clone git clone https://github.com/rmurai0610/MASt3R-SLAM.git --recursive
-cd MASt3R-SLAM/
-pip install -e thirdparty/mast3r
-pip install -e thirdparty/in3d
-pip install --no-build-isolation -e .
-pip install torchcodec==0.1
+    # MASt3R-SLAM installation
+    cd MASt3R-SLAM/
+    pip install --no-build-isolation -e thirdparty/mast3r
+    git submodule update --init --recursive
+    pip install thirdparty/in3d
+    pip install --no-build-isolation -e .
+    pip install torchcodec==0.1
 
-# Detectron2 installation
-pip install 'git+https://github.com/facebookresearch/detectron2.git@a59f05630a8f205756064244bf5beb8661f96180'
+    # Detectron2 installation
+    pip install --no-build-isolation 'git+https://github.com/facebookresearch/detectron2.git@a59f05630a8f205756064244bf5beb8661f96180'
 
-# pytorch3d installation
-conda install -c conda-forge libstdcxx-ng
-pip install "git+https://github.com/facebookresearch/pytorch3d.git@stable"
+    # pytorch3d installation
+    conda install -c conda-forge libstdcxx-ng
+    pip install --no-build-isolation "git+https://github.com/facebookresearch/pytorch3d.git@stable"
 
-# MoGe installation
-pip install git+https://github.com/microsoft/MoGe.git
-```
+    # MoGe installation
+    pip install git+https://github.com/microsoft/MoGe.git
+    ```
 
-3. Download Checkpoints 
-* Mast3r-SLAM checkpoints as released [here](https://github.com/rmurai0610/MASt3R-SLAM/tree/c3d0d5b67bf51d558d7640ff6032407f68041f92?tab=readme-ov-file#installation).
-```Bash
-mkdir -p checkpoints/
-wget https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth -P checkpoints/
-wget https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_trainingfree.pth -P checkpoints/
-wget https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_codebook.pkl -P checkpoints/
-```
-```
-The pretrained models and templates are placed at:
-data/
-└── pretrain/
-    └── hmr2b/
-        └── epoch=35-step=1000000.ckpt
-    ├── camcalib_sa_biased_l2.ckpt
-    ├── cascade_mask_rcnn_vitdet_h_75ep.py
-    ├── DEVA-propagation.pth
-    ├── droid.pth
-    ├── mogev2_model.pt
-    ├── sam_vit_h_4b8939.pth
-    └── vimo_checkpoint.pth.tar
-└── smpl/
-    ├── downsample_mat.pkl
-    ├── J_regressor_extra.npy
-    ├── J_regressor_h36m.npy
-    ├── kintree_table.pkl
-    ├── SMPL_FEMALE.pkl
-    ├── SMPL_MALE.pkl
-    ├── smpl_mean_params.npz
-    └── SMPL_NEUTRAL.pkl
-└── colors.txt
-└── pascal_occluders.pkl
-```
+3. Prepare data and models
+    
+    Register at [SMPLify](https://smplify.is.tue.mpg.de) and [SMPL](https://smpl.is.tue.mpg.de), whose usernames and passwords will be used by our script to download the SMPL models. TODO (yiwen) Run the following to fetch all models and checkpoints to `data/`. Thirdparty models include [MASt3r-SLAM checkpoints](https://github.com/rmurai0610/MASt3R-SLAM/tree/c3d0d5b67bf51d558d7640ff6032407f68041f92?tab=readme-ov-file#installation)
+    ```Bash
+    bash scripts/download_models.sh
+    ```
 
-## Prepare data
-Register at [SMPLify](https://smplify.is.tue.mpg.de) and [SMPL](https://smpl.is.tue.mpg.de), whose usernames and passwords will be used by our script to download the SMPL models. In addition, we will fetch trained checkpoints and an example video. Note that thirdparty models have their own licenses. 
+4. Check repo structure
 
-Run the following to fetch all models and checkpoints to `data/`. It also downloads `example_video.mov` for the demo.
-```Bash
-bash scripts/download_models.sh
-```
+* The pretrained models and templates are placed at
+    ```
+    data/
+    └── pretrain/
+        └── hmr2b/
+            └── epoch=35-step=1000000.ckpt
+        ├── camcalib_sa_biased_l2.ckpt
+        ├── cascade_mask_rcnn_vitdet_h_75ep.py
+        ├── DEVA-propagation.pth
+        ├── droid.pth
+        ├── mogev2_model.pt
+        ├── sam_vit_h_4b8939.pth
+        └── vimo_checkpoint.pth.tar
+    └── smpl/
+        ├── downsample_mat.pkl
+        ├── J_regressor_extra.npy
+        ├── J_regressor_h36m.npy
+        ├── kintree_table.pkl
+        ├── SMPL_FEMALE.pkl
+        ├── SMPL_MALE.pkl
+        ├── smpl_mean_params.npz
+        └── SMPL_NEUTRAL.pkl
+    └── colors.txt
+    └── pascal_occluders.pkl
+    ```
 
-## Run demo on videos
-
-```bash
-python ./scripts/emdb/run_custom.py --video <YOUR/VIDEO/PATH>.mp4 --no-viz --calib false
-python visualize_viser.py --human_npz_path <HUMAN/NPZ/PATH>.npz --camera_path <CAMERA/TXT/PATH>.txt
-```
-
-## Preparation
 * Data organization
     ```
     ./datasets
@@ -95,24 +82,35 @@ python visualize_viser.py --human_npz_path <HUMAN/NPZ/PATH>.npz --camera_path <C
     ```
 * Reset ``ROOT`` and ``DATASET_NPZ_PATH`` in ``./data_config.py`` to your own folders.
 
+## Run demo on videos
 
-## Train
+```bash
+# inference
+python ./scripts/emdb/run_custom.py --video <YOUR/VIDEO/PATH>.mp4 --no-viz --calib false
+
+# visualization
+python visualize_viser.py --human_npz_path <HUMAN/NPZ/PATH>.npz --camera_path <CAMERA/TXT/PATH>.txt
 ```
+
+## Training
+```Bash
+# Fine-tune a online camera coordinates HMR model based on HMR2.0
 python train.py --cfg configs/config_vimo.yaml
 ```
-* Modify the ``valid_range`` in ``./configs/config_vimo.yaml`` to ablation on estimated frame number.
 
 ## Evaluation
-```
-# online inference (set --calib true on emdb2)
+```Bash
+# run inference on emdb2 testset (set --calib true)
 python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true
+
 # cam traj eval
 python ./scripts/emdb/cam_only_eval.py --camera_root <PRED_CAMERA_DIR>
-# world coords HMR
+
+# world coords HMR eval
 python ./scripts/emdb/run_eval_mast3r_slam.py --split 2 --human_rootdir <PRED_HUMAN_DIR> --camera_rootdir <PRED_CAMERA_DIR>
 """
 ```
-The output camera trajectory is saved to ``./logs``, camera coordinates hmr is saved to ``./res_human_camera``.
+The output camera trajectory is saved to ``./logs``, Camera coordinates HMR result is saved to ``./res_human_camera``.
 
 **Metrics**
 - Pose and Shape
@@ -123,7 +121,6 @@ The output camera trajectory is saved to ``./logs``, camera coordinates hmr is s
 
 - Camera Trajectory
     * ATE: absolute trajectory error
-    * ATE-S: using our estimated scale
 
 - Human Trajectory
     * W-MPJPE100: slice a sequence into 100-frame segments and evaluate 3D joint error after aligning the first two frames
