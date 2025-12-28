@@ -9,7 +9,7 @@
 2. Creating a new anaconda environment.
     ```Bash
     # Base environment installation
-    conda create -n onlinehmr python=3.11 cmake
+    conda create -n onlinehmr python=3.11.5 cmake
     conda activate onlinehmr
     pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
     pip install --no-build-isolation git+https://github.com/mattloper/chumpy.git
@@ -28,16 +28,17 @@
     pip install --no-build-isolation 'git+https://github.com/facebookresearch/detectron2.git@a59f05630a8f205756064244bf5beb8661f96180'
 
     # pytorch3d installation
-    conda install -c conda-forge libstdcxx-ng
     pip install --no-build-isolation "git+https://github.com/facebookresearch/pytorch3d.git@stable"
 
     # MoGe installation
     pip install git+https://github.com/microsoft/MoGe.git
+
+    cd ../..
     ```
 
 3. Prepare data and models
     
-    Register at [SMPLify](https://smplify.is.tue.mpg.de) and [SMPL](https://smpl.is.tue.mpg.de), whose usernames and passwords will be used by our script to download the SMPL models. TODO (yiwen) Run the following to fetch all models and checkpoints to `data/`. Thirdparty models include [MASt3r-SLAM checkpoints](https://github.com/rmurai0610/MASt3R-SLAM/tree/c3d0d5b67bf51d558d7640ff6032407f68041f92?tab=readme-ov-file#installation), [HMR2.0b checkpoints]().
+    Register at [SMPLify](https://smplify.is.tue.mpg.de) and [SMPL](https://smpl.is.tue.mpg.de), whose usernames and passwords will be used by our script to download the SMPL models. Run the following to fetch all models and checkpoints to `data/`. Thirdparty models include [MASt3r-SLAM checkpoints](https://github.com/rmurai0610/MASt3R-SLAM/tree/c3d0d5b67bf51d558d7640ff6032407f68041f92?tab=readme-ov-file#installation), [HMR2.0b checkpoints](https://github.com/shubham-goel/4D-Humans).
     ```Bash
     bash scripts/download_models.sh
     ```
@@ -53,7 +54,6 @@
         ├── camcalib_sa_biased_l2.ckpt
         ├── cascade_mask_rcnn_vitdet_h_75ep.py
         ├── DEVA-propagation.pth
-        ├── droid.pth
         ├── mogev2_model.pt
         ├── sam_vit_h_4b8939.pth
         └── vimo_checkpoint.pth.tar
@@ -85,7 +85,7 @@
 ## Run demo on videos
 ```bash
 # inference
-python ./scripts/emdb/run_custom.py --video <YOUR/VIDEO/PATH>.mp4 --no-viz --calib false
+python ./scripts/emdb/run_custom.py --video <YOUR/VIDEO/PATH>.mp4 --calib false
 
 # visualization
 python visualize_viser.py --human_npz_path <HUMAN/NPZ/PATH>.npz --camera_path <CAMERA/TXT/PATH>.txt
@@ -109,7 +109,6 @@ python ./scripts/emdb/cam_only_eval.py --camera_root <PRED_CAMERA_DIR>
 
 # world coords HMR eval
 python ./scripts/emdb/run_eval_mast3r_slam.py --split 2 --human_rootdir <PRED_HUMAN_DIR> --camera_rootdir <PRED_CAMERA_DIR>
-"""
 ```
 The output camera trajectory is saved to ``./logs``, Camera coordinates HMR result is saved to ``./res_human_camera``.
 

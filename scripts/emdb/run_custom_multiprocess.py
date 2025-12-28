@@ -45,12 +45,9 @@ from mast3r_slam.mast3r_utils import (
     load_retriever,
     mast3r_inference_mono,
 )
-from mast3r_slam.multiprocess_utils import new_queue, try_get_msg
 from mast3r_slam.tracker import FrameTracker
-from mast3r_slam.visualization import WindowMsg, run_visualization
 from mast3r_slam.lietorch_utils import as_SE3
 import torch.multiprocessing as mp
-from lib.models import get_hmr_vimo
 from pytorch3d.transforms import quaternion_to_matrix
 
 # from lib.camera import run_metric_slam, align_cam_to_world
@@ -65,12 +62,16 @@ from detectron2.config import LazyConfig
 from segment_anything import SamPredictor, sam_model_registry
 
 """
-python ./scripts/emdb/run_custom.py --video ./tdance.mp4 --no-viz --calib false --smooth-method none
-python ./scripts/emdb/run_custom.py --video ./rock_climbing1.mp4 --no-viz --calib false --smooth-method ema
+python ./scripts/emdb/run_custom.py --video ./tdance.mp4 --calib false --smooth-method none
+python ./scripts/emdb/run_custom.py --video ./rock_climbing1.mp4 --calib false --smooth-method ema
 """
 
-single_color1 = [[1.0, 0.2, 0.0]]
-single_color2 = [[0.0, 0.8, 1.0]]
+single_color1 = [
+    [1.0, 0.2, 0.0],
+]
+single_color2 = [
+    [0.0, 0.8, 1.0],
+]
 
 def quaternion_translation_to_Sim3(t, q, device):
     """
@@ -108,6 +109,8 @@ def quaternion_translation_to_Sim3(t, q, device):
 
 
 def relocalization(frame, keyframes, factor_graph, retrieval_database):
+    # we are adding and then removing from the keyframe, so we need to be careful.
+    # The lock slows viz down but safer this way...
     with keyframes.lock:
         kf_idx = []
         retrieval_inds = retrieval_database.update(
@@ -225,7 +228,7 @@ def run_backend(cfg, model_path_or_model, states, keyframes, K):
 
         kf_idx = set(kf_idx)  # Remove duplicates by using set
         kf_idx.discard(idx)  # Remove current kf idx if included
-        kf_idx = list(kf_idx)
+        kf_idx = list(kf_idx)  # convert to list
         frame_idx = [idx] * len(kf_idx)
         if kf_idx:
             factor_graph.add_factors(
@@ -251,7 +254,7 @@ def init_detector():
     detectron2_cfg.train.init_checkpoint = "https://dl.fbaipublicfiles.com/detectron2/ViTDet/COCO/cascade_mask_rcnn_vitdet_h/f328730692/model_final_f05665.pkl"
     for i in range(3):
         detectron2_cfg.model.roi_heads.box_predictors[i].test_score_thresh = 0.25
-    detector = DefaultPredictor_Lazy(detectron2_cfg) # to cuda here
+    detector = DefaultPredictor_Lazy(detectron2_cfg)
     detector.model.eval()
     return detector
 
@@ -265,7 +268,10 @@ def init_sam(device):
 
 
 def bbox_est(center, scale, img_focal, img_center):
-    # approximate image center
+    '''
+    Pixel representation
+    '''
+    # Original image center
     img_cx, img_cy = img_center[:,0], img_center[:,1]
 
     # Implement CLIFF (Li et al.) bbox feature
@@ -282,13 +288,88 @@ def camera_coord_HMR(hmr_model, imgfiles, boxes, cache, img_focal, img_center):
                     img_focal=img_focal, img_center=img_center, cache=cache)
     
     return results, cache
+
+
+def run_hmr_process(hmr_input_queue, hmr_output_queue, checkpoint_path, device_str):
+    """
+    HMR process for parallel processing.
+    
+    Args:
+        hmr_input_queue: Queue for receiving HMR tasks (frame_id, imgfile, boxes, img_focal, img_center)
+        hmr_output_queue: Queue for sending HMR results (frame_id, results_dict)
+        checkpoint_path: Path to HMR checkpoint
+        device_str: Device string (e.g., "cuda:0")
+    """
+    import torch
+    import numpy as np
+    from torch.amp import autocast
+    from lib.models import get_hmr_vimo
+    
+    # Load HMR model in this process
+    device = torch.device(device_str)
+    hmr_model = get_hmr_vimo(checkpoint=checkpoint_path)
+    hmr_model.eval()
+    
+    # Maintain cache in this process
+    frame_feat_cache = None
+    
+    # Define camera_coord_HMR locally for this process
+    def camera_coord_HMR_local(hmr_model, imgfiles, boxes, cache, img_focal, img_center):
+        results, cache = hmr_model.inference_chunk_ar(imgfiles, boxes,
+                        img_focal=img_focal, img_center=img_center, cache=cache)
+        return results, cache
+    
+    print(f"[HMR Process] Started on {device_str}")
+    
+    while True:
+        try:
+            # Get task from queue (with timeout to allow checking for termination)
+            try:
+                task = hmr_input_queue.get(timeout=0.1)
+            except:
+                continue
+            
+            # Check for termination signal
+            if task is None:
+                print("[HMR Process] Received termination signal")
+                break
+            
+            frame_id, imgfile, boxes, img_focal, img_center = task
+            
+            # Process HMR
+            with torch.no_grad():
+                with autocast('cuda'):
+                    img_ck = np.array([imgfile])
+                    box_ck = np.array([boxes]).reshape(-1, 5)
+                    
+                    frame_results, frame_feat_cache = camera_coord_HMR_local(
+                        hmr_model, img_ck, box_ck, frame_feat_cache, img_focal, img_center
+                    )
+            
+            # Send results back (convert tensors to CPU for serialization)
+            results_dict = {
+                'pred_cam': frame_results['pred_cam'].cpu(),
+                'pred_pose': frame_results['pred_pose'].cpu(),
+                'pred_shape': frame_results['pred_shape'].cpu(),
+                'pred_rotmat': frame_results['pred_rotmat'].cpu(),
+                'pred_trans': frame_results['pred_trans'].cpu(),
+            }
+            
+            hmr_output_queue.put((frame_id, results_dict))
+            
+        except Exception as e:
+            print(f"[HMR Process] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+    
+    print("[HMR Process] Exiting")
     
 
 def load_camera_poses(cam_t, cam_q, scale=0.2, color_offset=0, gt=True):
     """
     Load camera poses from text file.
-    cam_t: tx ty tz 
-    cam_q: qx qy qz qw
+    Each line: tx ty tz qx qy qz qw
     Returns a list of LineSet pyramids.
     """
     
@@ -320,7 +401,7 @@ def load_camera_poses(cam_t, cam_q, scale=0.2, color_offset=0, gt=True):
         cam.colors = o3d.utility.Vector3dVector([single_color1[0]] * len(cam_lines))
     else:
         cam.colors = o3d.utility.Vector3dVector([single_color2[0]] * len(cam_lines))
-        ## [Option] incremental color along the time sequence
+        # incremental color along the time sequence
         # cam.colors = o3d.utility.Vector3dVector([rainbow_colors[(l_id + color_offset) % 20]] * len(cam_lines))
 
     return cam
@@ -390,9 +471,9 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--split', type=int, default=2)
     parser.add_argument("--save-as", default="default")
+    parser.add_argument('--output_dir', type=str, default='results/emdb/camera')
     parser.add_argument("--config", default="configs/base.yaml")
     parser.add_argument("--save_dir", default="./res_human_camera")
-    parser.add_argument("--no-viz", action="store_true")
     parser.add_argument("--calib", type=bool)
     parser.add_argument("--video", type=str, required=True, help="path to the input video")
     parser.add_argument("--smooth-method", type=str, default='ema', 
@@ -423,10 +504,14 @@ if __name__=='__main__':
     args = parser.parse_args()
 
     load_config(args.config)
+    # print(config)
+
+    savefolder = args.output_dir
+    os.makedirs(savefolder, exist_ok=True)
 
     detector = init_detector() # ViTDet
     sam_predictor = init_sam(device) # SAM for human mask
-    hmr_model = get_hmr_vimo(checkpoint='./results/onlinehmr/checkpoint.pth.tar')
+    # HMR model will be loaded in HMR process, not here
     metric_depth_model = load_mogev2_model(device)
     
     # Load MASt3R-SLAM model once for all sequences (shared across sequences)
@@ -440,10 +525,8 @@ if __name__=='__main__':
     smpl = SMPL()
     smpls = {g:SMPL(gender=g) for g in ['neutral', 'male', 'female']}
 
-    # Estimate camera motion on EMDB
+    # Estimate camera motion on EMDB (subset: spl)
     manager = mp.Manager()
-    main2viz = new_queue(manager, args.no_viz)
-    viz2main = new_queue(manager, args.no_viz)
     print(f'Running on custom video...')
 
     print(f"Split video to frames and register camera calibration")
@@ -468,7 +551,7 @@ if __name__=='__main__':
     img_h, img_w = cv2.imread(imgfiles[0]).shape[:2]
     dataset = load_dataset(img_folder)
     dataset.subsample(config["dataset"]["subsample"]) # set to 1 by default
-    rimg_h, rimg_w = dataset.get_img_shape()[0] # resized shape
+    rimg_h, rimg_w = dataset.get_img_shape()[0] # resized image and resized shape
 
     # Allow configurable buffer size for long videos
     # Default is 512, but can be increased via config
@@ -476,16 +559,11 @@ if __name__=='__main__':
     keyframes = SharedKeyframes(manager, rimg_h, rimg_w, buffer=max_keyframes)
     states = SharedStates(manager, rimg_h, rimg_w)
     
-    if not args.no_viz: # TODO(yiwen) remove this
-        viz = mp.Process(
-            target=run_visualization,
-            args=(config, states, keyframes, main2viz, viz2main),
-        )
-        viz.start()
-    
-    ## init intrinsics
+    # Use the pre-loaded model (already share_memory() called globally)
+    # Each sequence has its own backend process that accesses this shared model
+    # model = mast3r_model
     has_calib = dataset.has_calib()
-    use_calib = config["use_calib"] # set to false by default
+    use_calib = config["use_calib"]
 
     if use_calib and not has_calib:
         print("[Warning] No calibration provided for this dataset!")
@@ -499,17 +577,20 @@ if __name__=='__main__':
             device, dtype=torch.float32
         )
         keyframes.set_intrinsics(K)
+        # Extract focal length and center from calibration
         K_np = dataset.camera_intrinsics.K_frame
         img_focal = (K_np[0, 0] + K_np[1, 1]) / 2.0
         img_center = K_np[:2, 2]
     else:
         # Simple heuristic based on image dimensions. Does not support fov change
+        # Most cameras have focal length roughly 0.7-1.0 * max(width, height)
         img_focal = max(img_w, img_h) * 0.8  # Rough estimate: 80% of max dimension
         img_center = np.array([img_w / 2., img_h / 2.])
         print(f"[Info] No calibration provided. SLAM does not estimate intrinsics.")
         print(f"[Info] Using heuristic focal length for HMR: {img_focal:.1f} pixels (estimated from image size)")
+        
 
-    if dataset.save_results:
+    if dataset.save_results: # remove previously saved results
         save_dir, seq_name = eval.prepare_savedir(args, dataset)
         traj_file = save_dir / f"{seq_name}.txt"
         recon_file = save_dir / f"{seq_name}.ply"
@@ -519,12 +600,27 @@ if __name__=='__main__':
             recon_file.unlink()
     
     tracker = FrameTracker(mast3r_model, keyframes, device)
-    last_msg = WindowMsg()
+
+    # Create HMR queues for parallel processing
+    hmr_input_queue = manager.Queue()
+    hmr_output_queue = manager.Queue()
+    
+    # HMR results cache: {frame_id: results_dict}
+    hmr_results_cache = {}
+    next_expected_frame_id = 0
 
     # start backend
     backend_model_arg = None  # Backend will load model fresh in its own process
     backend = mp.Process(target=run_backend, args=(config, backend_model_arg, states, keyframes, K))
     backend.start()
+    
+    # start HMR process
+    hmr_checkpoint = './results/onlinehmr/checkpoint.pth.tar'  # NOTE(yiwen) change inference checkpoint path here.
+    hmr_process = mp.Process(
+        target=run_hmr_process,
+        args=(hmr_input_queue, hmr_output_queue, hmr_checkpoint, device)
+    )
+    hmr_process.start()
 
     # NOTE(yiwen) frontend loop, incrementally loop all frames
     i = 0
@@ -540,7 +636,6 @@ if __name__=='__main__':
     pred_rotmat = []
     pred_trans = []
 
-    frame_feat_cache = None
     naive_scaler = 1.0 # init depth-based scaler
     fix_scaler = 1.0
     imgs = [] # for rendered images
@@ -599,17 +694,6 @@ if __name__=='__main__':
     while True:
         ###### Camera Pose SLAM --> output Cam_R, Cam_T, also camera coordinates absolute depth (then convert to world depth) ######
         mode = states.get_mode()
-        msg = try_get_msg(viz2main)
-        last_msg = msg if msg is not None else last_msg
-        if last_msg.is_terminated:
-            states.set_mode(Mode.TERMINATED)
-            break
-        if last_msg.is_paused and not last_msg.next:
-            states.pause()
-            time.sleep(0.01)
-            continue
-        if not last_msg.is_paused:
-            states.unpause()
         if i == len(dataset): # NOTE(yiwen) end of the dataset
             states.set_mode(Mode.TERMINATED)
             break
@@ -755,7 +839,7 @@ if __name__=='__main__':
                     # Flatten the mask to match depths shape
                     human_mask_flat = human_mask_resized.flatten()
 
-                    # TODO(yiwen) to see whether applying the human mask make a real difference
+                    # TODO(yiwen) to see weather applying the human mask make a real difference
                     # breakpoint()
                     
                     # Exclude human regions from valid_mask
@@ -1049,7 +1133,7 @@ if __name__=='__main__':
                     T_WC = as_SE3(frame.T_WC)
                     x, y, z, qx, qy, qz, qw = T_WC.data.numpy().reshape(-1)
                     if len(keyframes)==2:
-                        f.write("0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0\n")
+                        f.write("0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0\n") #TODO(yiwen) may need to make to first one to 1
                     f.write(f"{naive_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
 
             # In single threaded mode, wait for the backend to finish
@@ -1073,37 +1157,60 @@ if __name__=='__main__':
                 boxes = np.hstack([boxes, confs[:, None]])
                 boxes = arrange_boxes(boxes, mode='size', min_size=100)
 
-        if boxes.shape[0]<1: # NOTE(yiwen) in emdb2 evaluation, boxes should come from gt annotations
-            # TODO(yiwen) if no boxes detected, skip the camera coord hmr
-            # record some missing hmr e.g. all zeros to npy/txt
+        # Submit HMR task to queue (parallel with SLAM)
+        if boxes.shape[0] >= 1:
+            # TODO(yiwen) multiple persons 的时候还是需要一下tracking？否则会检测出来多个bounding boxes，confidence都足够高，这种情况下应该不能直接用bbox去筛选
+            # 或者用bbox center过滤一下
+            if boxes.shape[0] > 1:  # when multiple person detected
+                boxes = boxes[0:1]
+            
+            # Submit task to HMR process
+            hmr_input_queue.put((i, imgfiles[i], boxes, img_focal, img_center))
+        
+        # Check for completed HMR results (non-blocking)
+        import queue
+        while True:
+            try:
+                frame_id, results_dict = hmr_output_queue.get_nowait()
+                hmr_results_cache[frame_id] = results_dict
+            except queue.Empty:
+                break
+            except Exception as e:
+                print(f"[Main] Error receiving HMR result: {e}")
+                break
+        
+        # Process results in order (wait for current frame's HMR result if needed)
+        frame_results = None
+        if i in hmr_results_cache:
+            frame_results = hmr_results_cache.pop(i)
+            # Move tensors back to device (they were moved to CPU for queue serialization)
+            pred_cam.append(frame_results['pred_cam'].to(device))
+            pred_pose.append(frame_results['pred_pose'].to(device))
+            pred_shape.append(frame_results['pred_shape'].to(device))
+            pred_rotmat.append(frame_results['pred_rotmat'].to(device))
+            pred_trans.append(frame_results['pred_trans'].to(device))
+        elif boxes.shape[0] >= 1:
+            # HMR result not ready yet, wait for it
+            # This should be rare if HMR is faster than SLAM, but we handle it
+            while i not in hmr_results_cache:
+                try:
+                    frame_id, results_dict = hmr_output_queue.get(timeout=0.1)
+                    hmr_results_cache[frame_id] = results_dict
+                except:
+                    time.sleep(0.01)
+                    continue
+            frame_results = hmr_results_cache.pop(i)
+            # Move tensors back to device
+            pred_cam.append(frame_results['pred_cam'].to(device))
+            pred_pose.append(frame_results['pred_pose'].to(device))
+            pred_shape.append(frame_results['pred_shape'].to(device))
+            pred_rotmat.append(frame_results['pred_rotmat'].to(device))
+            pred_trans.append(frame_results['pred_trans'].to(device))
+        else:
+            # No boxes detected, skip HMR processing
             continue
 
-        # TODO(yiwen) multiple persons 的时候还是需要一下tracking？否则会检测出来多个bounding boxes，confidence都足够高，这种情况下应该不能直接用bbox去筛选
-        # 或者用bbox center过滤一下
-        elif boxes.shape[0]>1: # when multiple person detected
-            boxes = boxes[0:1]
-        
-        img_ck = np.array([imgfiles[i]])
-        box_ck = np.array([boxes]).reshape(-1, 5)
-    
-
-        frame_results, frame_feat_cache = camera_coord_HMR(
-            hmr_model, img_ck, box_ck, frame_feat_cache, img_focal, img_center)
-        
-        # NOTE(yiwen) two frame cache, shape[1] = h*w*mem_t
-        # print(f"cache length {frame_feat_cache['layers'][0]['mem_k'].shape}")
-
-        pred_cam.append(frame_results['pred_cam'])
-        pred_pose.append(frame_results['pred_pose'])
-        pred_shape.append(frame_results['pred_shape'])
-        pred_rotmat.append(frame_results['pred_rotmat'])
-        pred_trans.append(frame_results['pred_trans'])
-
-        """
-        TODO(yiwen) 
-        camcoord_hmr = mp.process(target=function,args=())
-        camcoord_hmr.start()
-        """
+        # Now we have both SLAM and HMR results, proceed with world coordinate transformation
         if i==0:
             fix_scaler = naive_scaler
         # world coord camera trajectory
@@ -1192,11 +1299,11 @@ if __name__=='__main__':
     ###### Save Global Results ######
     # cam coord results of the whole sequence, for eval
     os.makedirs(args.save_dir, exist_ok=True)
-    cam_coord_results = {'pred_cam': torch.cat(pred_cam),
-            'pred_pose': torch.cat(pred_pose),
-            'pred_shape': torch.cat(pred_shape),
-            'pred_rotmat': torch.cat(pred_rotmat),
-            'pred_trans': torch.cat(pred_trans)}
+    cam_coord_results = {'pred_cam': torch.cat(pred_cam).cpu().numpy(),
+            'pred_pose': torch.cat(pred_pose).cpu().numpy(),
+            'pred_shape': torch.cat(pred_shape).cpu().numpy(),
+            'pred_rotmat': torch.cat(pred_rotmat).cpu().numpy(),
+            'pred_trans': torch.cat(pred_trans).cpu().numpy()}
     np.savez(f'{args.save_dir}/{name_prefix}.npz', **cam_coord_results)
 
     # the final cam pose and scene pc after global optimization
@@ -1209,21 +1316,31 @@ if __name__=='__main__':
             cam_savedir,
             f"{name_prefix}_{seq_name}.ply",
             keyframes,
-            last_msg.C_conf_threshold,
+            1.5,  # C_conf_threshold default value
         )
 
     print("done")
     
-    # Send termination signal to viz
-    if not args.no_viz:
-        try:
-            main2viz.put(WindowMsg(is_terminated=True), timeout=1)
-        except:
-            pass
+    # Send termination signal to HMR process
+    print("Terminating HMR process...")
+    hmr_input_queue.put(None)  # Send termination signal
+    
+    # Wait for HMR process to finish
+    timeout = 30
+    start_time = time.time()
+    while hmr_process.is_alive() and (time.time() - start_time) < timeout:
+        time.sleep(0.1)
+    
+    if hmr_process.is_alive():
+        print("Warning: HMR process did not finish, terminating...")
+        hmr_process.terminate()
+        hmr_process.join()
+    else:
+        hmr_process.join()
+        print("HMR process joined")
     
     # Wait for processes to finish with timeout
     print("Waiting for backend to finish...")
-    timeout = 30
     start_time = time.time()
     
     while backend.is_alive() and (time.time() - start_time) < timeout:
@@ -1237,28 +1354,11 @@ if __name__=='__main__':
         backend.join()
         print("Backend joined")
     
-    if not args.no_viz:
-        print("Waiting for visualization to finish...")
-        start_time = time.time()
-        while viz.is_alive() and (time.time() - start_time) < timeout:
-            time.sleep(0.1)
-        
-        if viz.is_alive():
-            print("Warning: Visualization did not finish, terminating...")
-            viz.terminate()
-            viz.join()
-        else:
-            viz.join()
-            print("Visualization joined")
-    
     # Clean up resources
     print("Cleaning up resources...")
     del tracker
     del keyframes
     del states
-    if not args.no_viz:
-        del main2viz
-        del viz2main
     del manager    
     torch.cuda.empty_cache()
     if visualize_hcgif:

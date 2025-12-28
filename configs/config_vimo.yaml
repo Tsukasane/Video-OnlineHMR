@@ -53,7 +53,6 @@ MODEL:
   MOTION_HDIM: 384
   ST_NLAYER: 6
   MOTION_NLAYER: 6
-  VALID_RANGE: (0,2) # remove this
 
 
 EXP_NAME: 'onlinehmr'
