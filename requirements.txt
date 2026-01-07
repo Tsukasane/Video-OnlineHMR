@@ -33,3 +33,4 @@ Pygments==2.19.2
 termcolor==3.1.0
 gdown
 pybind11
+pytorch-minimize

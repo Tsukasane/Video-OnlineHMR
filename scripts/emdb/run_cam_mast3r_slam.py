@@ -1,23 +1,28 @@
 import sys
 import os
-# Force OSMesa rendering - disable EGL and X11
-# These must be set BEFORE importing open3d
-os.environ["OPEN3D_CPU_RENDERING"] = "true"
+
+# osmesa headless setup for Open3D and PyOpenGL, before importing Open3D
+conda_env_path = os.environ.get('CONDA_PREFIX', sys.prefix)
+conda_lib_path = os.path.join(conda_env_path, 'lib')
+
+os.environ["LD_LIBRARY_PATH"] = conda_lib_path + ":" + os.environ.get("LD_LIBRARY_PATH", "")
+os.environ["LIBGL_DRIVERS_PATH"] = os.path.join(conda_lib_path, "dri")
+
 os.environ["OPEN3D_HEADLESS"] = "1"
 os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
+os.environ["GALLIUM_DRIVER"] = "llvmpipe"
+os.environ["PYOPENGL_PLATFORM"] = "osmesa"
+
+import torch
 if "DISPLAY" in os.environ:
     del os.environ["DISPLAY"]
-# Force OSMesa platform for PyOpenGL (if used)
-os.environ["PYOPENGL_PLATFORM"] = "osmesa"
-# Additional Mesa/OSMesa settings for software rendering
-os.environ["GALLIUM_DRIVER"] = "llvmpipe"  # Use software rendering driver
-os.environ["MESA_GL_VERSION_OVERRIDE"] = "3.3"  # Set OpenGL version
 
 sys.path.insert(0, os.path.dirname(__file__) + '/../..')
-sys.path.insert(0, './thirdparty/MASt3R-SLAM') # TODO(yiwen) modify this to thirdparty/MASt3R-SLAM
+sys.path.insert(0, './thirdparty/MASt3R-SLAM')
 
 import cv2
 import torch
+import torch.nn.functional as F
 import argparse
 import numpy as np
 import pickle as pkl
@@ -61,17 +66,6 @@ from lib.vis.traj import *
 from torch.amp import autocast
 from detectron2.config import LazyConfig
 from segment_anything import SamPredictor, sam_model_registry
-
-"""
-NOTE(yiwen) v100/h100 have compile difference (yeah, cannot run on v100)
-python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true --soft-mask true
-
-multiprocess: one frame in
-slam-frontend 
-slam-backend
-human cam coord hmr
-viser visualization(?)
-"""
 
 single_color1 = [
     [1.0, 0.2, 0.0],
@@ -244,9 +238,7 @@ def register_emdb(args):
     # EMDB dataset and splits
     roots = []
     for p in range(10):
-        # if p>1: #NOTE(yiwen) debug
-        #     break
-        folder = f'./../datasets/emdb/P{p}'
+        folder = f'./../../datasets/emdb/P{p}' # NOTE(yiwen) change this to your EMDB2 path
         root = sorted(glob(f'{folder}/*'))
         roots.extend(root)
 
@@ -257,6 +249,7 @@ def register_emdb(args):
         ann = pkl.load(open(annfile, 'rb'))
         if ann[f'emdb{spl}']:
             emdb.append(root)
+    emdb = emdb[11:]
     return emdb
 
 
@@ -367,6 +360,8 @@ if __name__=='__main__':
     parser.add_argument("--no-viz", action="store_true")
     parser.add_argument("--calib", type=bool)
     parser.add_argument("--soft-mask", type=bool)
+    parser.add_argument("--depth-mask", action="store_true",
+                       help='Apply human mask to depth maps (SLAM depth and metric depth) when computing scaler')
 
     args = parser.parse_args()
 
@@ -379,7 +374,7 @@ if __name__=='__main__':
     emdb = register_emdb(args) # dataset
     detector = init_detector(device) # ViTDet
     sam_predictor = init_sam(device) # SAM for human mask
-    hmr_model = get_hmr_vimo(checkpoint='./results/checkpoint_best.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
+    hmr_model = get_hmr_vimo(checkpoint='./results/onlinehmr/checkpoint.pth.tar') # NOTE(yiwen) change inference checkpoint path here.
     metric_depth_model = load_mogev2_model(device)
     
     # Load MASt3R-SLAM model once for all sequences (shared across sequences)
@@ -509,8 +504,10 @@ if __name__=='__main__':
 
         frame_feat_cache = None
         naive_scaler = 1 # init depth-based scaler
+        refined_scaler = 1
         
         imgs = [] # for rendered images
+        mask_thres = 1e-4
         print(f"Start per frame processing")
 
         # Offscreen renderer
@@ -552,6 +549,7 @@ if __name__=='__main__':
             img_cv2 = dataset.read_img(i) # the original size, 0-255 scale
 
             boxes_np = None
+            hard_human_mask = None  # Initialize hard mask at the start of each frame
             if 'emdb' in root and args.calib:
                 boxes_np = np.array(ann_boxes[i]).reshape(-1, 4)
             else:
@@ -577,6 +575,9 @@ if __name__=='__main__':
                     )
                 masks = masks.detach().cpu().squeeze(1)  # (N, H, W)
                 human_mask = (masks.sum(dim=0) > 0).numpy()  # (H, W) bool
+
+                # Store hard mask before soft mask processing (for depth masking)
+                hard_human_mask = human_mask.copy()
 
                 if args.soft_mask:
                     args.soft_mask_gamma = 0.85
@@ -659,21 +660,132 @@ if __name__=='__main__':
                     
                     # Reshape to image dimensions
                     img_shape = frame.img_shape.flatten()[:2].cpu().numpy()  # [H, W]
-                    depth_map = depths.reshape(img_shape[0], img_shape[1])
+                    depth_map = depths.reshape(img_shape[0], img_shape[1]) # 512, 384
                     conf_map = confidences.reshape(img_shape[0], img_shape[1])
                     
                     # Filter valid depths (remove invalid/negative depths)
                     valid_mask = depths > 0
+                    
+                    # Also remove human region from SLAM depths (only if --depth-mask is enabled)
+                    if args.depth_mask and hard_human_mask is not None and hard_human_mask.any():
+                        mask_h, mask_w = hard_human_mask.shape
+                        depth_h, depth_w = img_shape[0], img_shape[1]
+                        
+                        if mask_h != depth_h or mask_w != depth_w:
+                            mask_torch = torch.from_numpy(hard_human_mask).float().unsqueeze(0).unsqueeze(0)
+                            mask_resized = F.interpolate(
+                                mask_torch,
+                                size=(depth_h, depth_w),
+                                mode='bilinear',
+                                align_corners=False
+                            ).squeeze(0).squeeze(0)
+                            human_mask_resized = mask_resized.cpu().numpy() > mask_thres
+                        else:
+                            # Same size, just convert to bool if needed
+                            human_mask_resized = hard_human_mask > mask_thres if hard_human_mask.dtype == bool else hard_human_mask > mask_thres
+                        
+                        # Flatten the mask to match depths shape
+                        human_mask_flat = human_mask_resized.flatten()
+                        
+                        # Exclude human regions from valid_mask
+                        valid_mask = valid_mask & (~human_mask_flat)
+                    
                     valid_depths = depths[valid_mask]
                     valid_confs = confidences[valid_mask]
 
                     # metric scale depth(?)
                     depth_input_img = torch.tensor(img).permute(2, 0, 1) # 3, 960, 720
-                    metric_depth = metric_depth_model.infer(depth_input_img)["depth"]
+                    metric_depth = metric_depth_model.infer(depth_input_img)["depth"] # 960. 720
 
-                    # X_canon_world = T_WC.act(frame.X_canon)  # Transform to world coordinates  
-                    
-                    naive_scaler = metric_depth.min() / valid_depths.min()
+                    # Prepare masked versions for est_scale_hybrid if --depth-mask is enabled
+                    depth_map_for_scale = depth_map.copy()
+                    metric_depth_for_scale = metric_depth.cpu().numpy() if isinstance(metric_depth, torch.Tensor) else metric_depth.copy()
+                    metric_depth_min = None
+
+                    # Remove human region from metric depth before computing min (only if --depth-mask is enabled)
+                    if args.depth_mask and hard_human_mask is not None and hard_human_mask.any():
+                        # Ensure metric_depth is 2D (H, W)
+                        if metric_depth.dim() > 2:
+                            metric_depth_2d = metric_depth.squeeze()
+                        else:
+                            metric_depth_2d = metric_depth
+                        
+                        # Convert human_mask to same shape and type as metric_depth
+                        if isinstance(hard_human_mask, np.ndarray):
+                            # human mask and metric_depth are all in original image size
+                            mask_h, mask_w = hard_human_mask.shape
+                            metric_h, metric_w = metric_depth_2d.shape
+
+                            if mask_h != metric_h or mask_w != metric_w:
+                                # Resize mask to match metric_depth dimensions
+                                mask_torch = torch.from_numpy(hard_human_mask).float().unsqueeze(0).unsqueeze(0)
+                                mask_resized = F.interpolate(
+                                    mask_torch,
+                                    size=(metric_h, metric_w),
+                                    mode='bilinear',
+                                    align_corners=False
+                                ).squeeze(0).squeeze(0)
+                                human_mask_resized_metric = mask_resized.cpu().numpy() > mask_thres
+                            else:
+                                human_mask_resized_metric = hard_human_mask > mask_thres if hard_human_mask.dtype == bool else hard_human_mask > mask_thres
+                            
+                            # Mask out human regions: set to a large value so they're ignored in min()
+                            if isinstance(metric_depth_2d, torch.Tensor):
+                                metric_depth_masked = metric_depth_2d.clone().cpu().numpy()
+                            else:
+                                metric_depth_masked = metric_depth_2d.copy()
+                            metric_depth_masked[human_mask_resized_metric] = np.inf
+                            valid_metric_depths = metric_depth_masked[metric_depth_masked != np.inf]
+                            
+                            if len(valid_metric_depths) > 0:
+                                metric_depth_min = np.min(valid_metric_depths)
+                            else:
+                                # Fallback: if all values are masked, use original min
+                                metric_depth_min = metric_depth.min().item() if isinstance(metric_depth, torch.Tensor) else metric_depth.min()
+                            
+                            # Prepare masked metric_depth for est_scale_hybrid
+                            metric_depth_for_scale = metric_depth_masked.copy()
+                        else:
+                            # If mask is not available or empty, use original min
+                            metric_depth_min = metric_depth.min().item() if isinstance(metric_depth, torch.Tensor) else metric_depth.min()
+                    else:
+                        # No human mask, use original min
+                        metric_depth_min = metric_depth.min().item() if isinstance(metric_depth, torch.Tensor) else metric_depth.min()
+
+                    # Apply mask to depth_map for est_scale_hybrid if --depth-mask is enabled
+                    if args.depth_mask and hard_human_mask is not None and hard_human_mask.any():
+                        # Create masked version of depth_map (set human regions to 0 to exclude from scale estimation)
+                        depth_map_masked = depth_map.copy()
+                        # Use the mask that was already resized for SLAM depth processing (human_mask_resized)
+                        # This mask is already the correct size for depth_map
+                        if 'human_mask_resized' in locals():
+                            depth_map_masked[human_mask_resized] = 0.0
+                        else:
+                            # Fallback: if mask wasn't resized (same size case), use it directly
+                            mask_h, mask_w = hard_human_mask.shape
+                            depth_h, depth_w = depth_map.shape
+                            if mask_h == depth_h and mask_w == depth_w:
+                                depth_map_masked[hard_human_mask > mask_thres] = 0.0
+                            else:
+                                # Need to resize mask
+                                mask_torch = torch.from_numpy(hard_human_mask).float().unsqueeze(0).unsqueeze(0)
+                                mask_resized = F.interpolate(
+                                    mask_torch,
+                                    size=(depth_h, depth_w),
+                                    mode='bilinear',
+                                    align_corners=False
+                                ).squeeze(0).squeeze(0)
+                                human_mask_resized_for_depth = mask_resized.cpu().numpy() > mask_thres
+                                depth_map_masked[human_mask_resized_for_depth] = 0.0
+                        depth_map_for_scale = depth_map_masked
+
+                    from scripts.emdb.refine_depth import est_scale_hybrid
+                    refined_scaler = est_scale_hybrid(
+                        slam_depth_raw=depth_map_for_scale,
+                        pred_depth=metric_depth_for_scale
+                    )
+                    naive_scaler = metric_depth_min / valid_depths.min()
+
                     """
                     slam depth * scale = pred depth
 
@@ -712,7 +824,35 @@ if __name__=='__main__':
                     img_shape = frame.img_shape.flatten()[:2].cpu().numpy()
                     depth_map = depths.reshape(img_shape[0], img_shape[1])
                     
+                    # Filter valid depths (remove invalid/negative depths)
                     valid_mask = depths > 0
+                    
+                    # Also remove human region from valid depths (only if --depth-mask is enabled)
+                    if args.depth_mask and hard_human_mask is not None and hard_human_mask.any():
+                        # Resize mask to match depth_map dimensions if needed
+                        mask_h, mask_w = hard_human_mask.shape
+                        depth_h, depth_w = img_shape[0], img_shape[1]
+                        
+                        if mask_h != depth_h or mask_w != depth_w:
+                            # Resize mask to match depth_map dimensions
+                            mask_torch = torch.from_numpy(hard_human_mask).float().unsqueeze(0).unsqueeze(0)
+                            mask_resized = F.interpolate(
+                                mask_torch,
+                                size=(depth_h, depth_w),
+                                mode='bilinear',
+                                align_corners=False
+                            ).squeeze(0).squeeze(0)
+                            human_mask_resized = mask_resized.cpu().numpy() > mask_thres
+                        else:
+                            # Same size, just convert to bool if needed
+                            human_mask_resized = hard_human_mask > mask_thres if hard_human_mask.dtype == bool else hard_human_mask > mask_thres
+                        
+                        # Flatten the mask to match depths shape
+                        human_mask_flat = human_mask_resized.flatten()
+                        
+                        # Exclude human regions from valid_mask
+                        valid_mask = valid_mask & (~human_mask_flat)
+                    
                     valid_depths = depths[valid_mask]
                     
                     if len(valid_depths) > 0:
@@ -736,7 +876,7 @@ if __name__=='__main__':
                     t = dataset.timestamps[frame.frame_id]
                     T_WC = as_SE3(frame.T_WC)
                     x, y, z, qx, qy, qz, qw = T_WC.data.numpy().reshape(-1)
-                    f.write(f"{naive_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
+                    f.write(f"{refined_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
                     # f.write(f"{t} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
             
             # save key frame results
@@ -752,8 +892,8 @@ if __name__=='__main__':
                         T_WC = as_SE3(frame.T_WC)
                         x, y, z, qx, qy, qz, qw = T_WC.data.numpy().reshape(-1)
                         if len(keyframes)==2:
-                            f.write("0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0\n") #TODO(yiwen) may need to make to first one to 1
-                        f.write(f"{naive_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
+                            f.write("0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0\n")
+                        f.write(f"{refined_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
 
                 # In single threaded mode, wait for the backend to finish
                 while config["single_thread"]:
@@ -782,13 +922,9 @@ if __name__=='__main__':
                         boxes = np.hstack([boxes, confs[:, None]])
                         boxes = arrange_boxes(boxes, mode='size', min_size=100)
 
-                if boxes.shape[0]<1: # NOTE(yiwen) in emdb2 evaluation, boxes should come from gt annotations
-                    # TODO(yiwen) if no boxes detected, skip the camera coord hmr
-                    # record some missing hmr e.g. all zeros to npy/txt
+                if boxes.shape[0]<1: # NOTE(yiwen) in emdb2 evaluation (single person), boxes should come from gt annotations
                     continue
 
-                # TODO(yiwen) multiple persons add tracking？
-                # use bbox center to filter
                 elif boxes.shape[0]>1: # when multiple person detected
                     boxes = boxes[0:1]
             
@@ -819,7 +955,7 @@ if __name__=='__main__':
             """
 
             # world coord camera trajectory
-            current_camt = torch.tensor([naive_scaler*x, naive_scaler*y, naive_scaler*z]).unsqueeze(0)
+            current_camt = torch.tensor([refined_scaler*x, refined_scaler*y, refined_scaler*z]).unsqueeze(0)
             current_camq = torch.tensor([qw, qx, qy, qz]).unsqueeze(0)
 
             current_camr = quaternion_to_matrix(current_camq)

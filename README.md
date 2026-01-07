@@ -85,8 +85,13 @@
 ## Run demo on videos
 ```bash
 # inference
-python ./scripts/emdb/run_custom.py --video <YOUR/VIDEO/PATH>.mp4 --calib false
-
+python ./scripts/run_custom.py --video <YOUR/VIDEO/PATH>.mp4 --calib false --depth-mask
+```
+Results are saved to
+* ``./res_human_camera/global_results`` -- global optimized scene
+* ``./res_human_camera/*.npz`` -- camera coordinate human motion
+* ``./logs/*.images_incremental_all.txt`` -- incremental camera extrinsics estimated by SLAM
+```bash
 # visualization
 python visualize_viser.py --human_npz_path <HUMAN/NPZ/PATH>.npz --camera_path <CAMERA/TXT/PATH>.txt
 ```
@@ -101,8 +106,8 @@ The training log and output will be placed at ``./results``. Set ``self.visualiz
 
 ## Evaluation
 ```Bash
-# run inference on emdb2 testset (set --calib true)
-python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true
+# run inference on emdb2 testset (set --calib true), split 2 indicates the emdb2 subset
+python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true --soft-mask true --depth-mask
 
 # cam traj eval
 python ./scripts/emdb/cam_only_eval.py --camera_root <PRED_CAMERA_DIR>

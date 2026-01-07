@@ -18,7 +18,7 @@ if "DISPLAY" in os.environ:
     del os.environ["DISPLAY"]
 
 import open3d as o3d
-sys.path.insert(0, os.path.dirname(__file__) + '/../..')
+sys.path.insert(0, os.path.dirname(__file__) + '/..')
 sys.path.insert(0, './thirdparty/MASt3R-SLAM')
 import cv2
 import torch
@@ -65,8 +65,8 @@ from detectron2.config import LazyConfig
 from segment_anything import SamPredictor, sam_model_registry
 
 """
-python ./scripts/emdb/run_custom.py --video ./tdance.mp4 --no-viz --calib false --smooth-method none
-python ./scripts/emdb/run_custom.py --video ./rock_climbing1.mp4 --no-viz --calib false --smooth-method ema
+python ./scripts/run_custom.py --video ./tdance.mp4 --no-viz --calib false --smooth-method none
+python ./scripts/run_custom.py --video ./rock_climbing1.mp4 --no-viz --calib false --smooth-method ema
 """
 
 single_color1 = [[1.0, 0.2, 0.0]]
@@ -419,6 +419,8 @@ if __name__=='__main__':
                        help='Sigma for Gaussian blur in mask processing (default: 5.0)')
     parser.add_argument("--mask-dilation-iterations", type=int, default=3,
                        help='Number of dilation iterations for mask processing (default: 3)')
+    parser.add_argument("--depth-mask", action="store_true",
+                       help='Apply human mask to depth maps (SLAM depth and metric depth) when computing scaler')
 
     args = parser.parse_args()
 
@@ -454,8 +456,10 @@ if __name__=='__main__':
 
     seq_folder = f'results/{seq}'
     img_folder = f'{seq_folder}/images'
+    depth_img_folder = f'{seq_folder}/depth_images'
     os.makedirs(seq_folder, exist_ok=True)
     os.makedirs(img_folder, exist_ok=True)
+    os.makedirs(depth_img_folder, exist_ok=True)
 
     print('Extracting frames ...')
     nframes = video2frames(file, img_folder)
@@ -542,6 +546,7 @@ if __name__=='__main__':
 
     frame_feat_cache = None
     naive_scaler = 1.0 # init depth-based scaler
+    refined_scaler = 1.0 # refined depth-based scaler
     fix_scaler = 1.0
     imgs = [] # for rendered images
     
@@ -660,18 +665,17 @@ if __name__=='__main__':
                     # Store soft_mask for confidence masking (use soft_mask instead of binary mask)
                     human_mask = soft_mask
 
+                    ## visulize soft mask overlay
                     # if i==29:
                     #     mask = human_mask.detach().cpu().numpy()
                     #     img_np = img.detach().cpu().numpy() if hasattr(img, 'detach') else img
 
-                    #     # 归一化到 0-1 区间（如果是 0–255 图像）
+                    #     # Normalize img_np to [0,1] if needed
                     #     if img_np.max() > 1.5:
                     #         img_np = img_np / 255.0
 
                     #     overlay_color = np.array([0.0, 0.0, 0.0])
 
-                    #     # mask[..., None] 扩展为 3 通道，以便广播计算
-                    #     # 透明度 α = mask 值（0→透明, 1→完全红）
                     #     overlay = img_np * (1 - mask[..., None]) + overlay_color * mask[..., None]
 
                     #     plt.imshow(overlay)
@@ -734,8 +738,8 @@ if __name__=='__main__':
                 valid_depths = depths[valid_mask]
                 print(f"debug -- before human mask scaler: {metric_depth.min() / valid_depths.min()}")
                 
-                # Also remove human region from SLAM depths
-                if hard_human_mask is not None and hard_human_mask.any():
+                # Also remove human region from SLAM depths (only if --depth-mask is enabled)
+                if args.depth_mask and hard_human_mask is not None and hard_human_mask.any():
                     mask_h, mask_w = hard_human_mask.shape
                     depth_h, depth_w = img_shape[0], img_shape[1]
                     
@@ -763,9 +767,14 @@ if __name__=='__main__':
                 
                 valid_depths = depths[valid_mask]
                 valid_confs = confidences[valid_mask]
+
+                # Prepare masked versions for est_scale_hybrid if --depth-mask is enabled
+                depth_map_for_scale = depth_map.copy()
+                metric_depth_for_scale = metric_depth.cpu().numpy() if isinstance(metric_depth, torch.Tensor) else metric_depth.copy()
+                metric_depth_min = None
                 
-                # Remove human region from metric depth before computing min
-                if hard_human_mask is not None and hard_human_mask.any():
+                # Remove human region from metric depth before computing min (only if --depth-mask is enabled)
+                if args.depth_mask and hard_human_mask is not None and hard_human_mask.any():
                     # Ensure metric_depth is 2D (H, W)
                     if metric_depth.dim() > 2:
                         metric_depth_2d = metric_depth.squeeze()
@@ -781,35 +790,64 @@ if __name__=='__main__':
                         if mask_h != metric_h or mask_w != metric_w:
                             # Resize mask to match metric_depth dimensions
                             mask_torch = torch.from_numpy(hard_human_mask).float().unsqueeze(0).unsqueeze(0)
-                            mask_resized = F.interpolate(
+                            mask_resized_metric = F.interpolate(
                                 mask_torch,
                                 size=(metric_h, metric_w),
                                 mode='bilinear',
                                 align_corners=False
                             ).squeeze(0).squeeze(0)
-                            human_mask_resized = mask_resized.cpu().numpy() > mask_thres
+                            human_mask_resized_metric = mask_resized_metric.cpu().numpy() > mask_thres
                         else:
-                            human_mask_resized = hard_human_mask > mask_thres if hard_human_mask.dtype == bool else hard_human_mask > mask_thres
+                            human_mask_resized_metric = hard_human_mask > mask_thres if hard_human_mask.dtype == bool else hard_human_mask > mask_thres
                         
                         # Mask out human regions: set to a large value so they're ignored in min()
                         if isinstance(metric_depth_2d, torch.Tensor):
                             metric_depth_masked = metric_depth_2d.clone().cpu().numpy()
                         else:
                             metric_depth_masked = metric_depth_2d.copy()
-                        metric_depth_masked[human_mask_resized] = np.inf
-                        # breakpoint()
+                        metric_depth_masked[human_mask_resized_metric] = np.inf
                         valid_metric_depths = metric_depth_masked[metric_depth_masked != np.inf]
                         if len(valid_metric_depths) > 0:
                             metric_depth_min = np.min(valid_metric_depths)
                         else:
                             # Fallback: if all values are masked, use original min
                             metric_depth_min = metric_depth.min().item() if isinstance(metric_depth, torch.Tensor) else metric_depth.min()
+                        
+                        # Use masked metric_depth for est_scale_hybrid
+                        metric_depth_for_scale = metric_depth_masked.copy()
                     else:
                         # If mask is not available or empty, use original min
                         metric_depth_min = metric_depth.min().item() if isinstance(metric_depth, torch.Tensor) else metric_depth.min()
                 else:
                     # No human mask, use original min
                     metric_depth_min = metric_depth.min().item() if isinstance(metric_depth, torch.Tensor) else metric_depth.min()
+
+                # Apply mask to depth_map for est_scale_hybrid if --depth-mask is enabled
+                if args.depth_mask and hard_human_mask is not None and hard_human_mask.any():
+                    # Create masked version of depth_map (set human regions to 0 to exclude from scale estimation)
+                    depth_map_masked = depth_map.copy()
+                    # Use the mask that was already resized for SLAM depth processing (human_mask_resized)
+                    # This mask is already the correct size for depth_map
+                    if 'human_mask_resized' in locals():
+                        depth_map_masked[human_mask_resized] = 0.0
+                    else:
+                        # Fallback: if mask wasn't resized (same size case), use it directly
+                        mask_h, mask_w = hard_human_mask.shape
+                        depth_h, depth_w = depth_map.shape
+                        if mask_h == depth_h and mask_w == depth_w:
+                            depth_map_masked[hard_human_mask > mask_thres] = 0.0
+                        else:
+                            # Need to resize mask
+                            mask_torch = torch.from_numpy(hard_human_mask).float().unsqueeze(0).unsqueeze(0)
+                            mask_resized = F.interpolate(
+                                mask_torch,
+                                size=(depth_h, depth_w),
+                                mode='bilinear',
+                                align_corners=False
+                            ).squeeze(0).squeeze(0)
+                            human_mask_resized_for_depth = mask_resized.cpu().numpy() > mask_thres
+                            depth_map_masked[human_mask_resized_for_depth] = 0.0
+                    depth_map_for_scale = depth_map_masked
                 
 
                 if len(metric_depth) > 0:
@@ -817,11 +855,16 @@ if __name__=='__main__':
                         metric_depth_normalized = (metric_depth - metric_depth.min()) / (metric_depth.max() - metric_depth.min())
                         metric_depth_normalized = metric_depth_normalized.detach().cpu().numpy()
                         metric_depth_uint8 = (metric_depth_normalized * 255).astype(np.uint8)
-                        cv2.imwrite(f"mdepth_frame_{i:06d}.png", metric_depth_uint8)
+                        cv2.imwrite(f"{os.path.join(depth_img_folder, f'mdepth_frame_{i:06d}.png')}", metric_depth_uint8)
 
+                # Use est_scale_hybrid for refined scaler estimation
+                from scripts.emdb.refine_depth import est_scale_hybrid
+                refined_scaler = est_scale_hybrid(
+                    slam_depth_raw=depth_map_for_scale,
+                    pred_depth=metric_depth_for_scale
+                )
                 naive_scaler = metric_depth_min / valid_depths.min()
-                print(f"debug -- after human mask scaler: {naive_scaler}")
-
+                
                 """
                 slam depth * scale = pred depth
 
@@ -834,7 +877,7 @@ if __name__=='__main__':
                     if visualize_depth and (i % 10 == 0):  # Save every 10th frame
                         depth_normalized = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
                         depth_uint8 = (depth_normalized * 255).astype(np.uint8)
-                        cv2.imwrite(f"depth_frame_{i:06d}.png", depth_uint8)
+                        cv2.imwrite(f"{os.path.join(depth_img_folder, f'depth_frame_{i:06d}.png')}", depth_uint8)
 
         # Mast3r-SLAM relocation          
         elif mode == Mode.RELOC:
@@ -854,15 +897,15 @@ if __name__=='__main__':
                 # Filter valid depths (remove invalid/negative depths)
                 valid_mask = depths > 0
                 
-                # Also remove human region from valid depths
-                if human_mask is not None and human_mask.any():
-                    # Resize human_mask to match depth_map dimensions if needed
-                    mask_h, mask_w = human_mask.shape
+                # Also remove human region from valid depths (only if --depth-mask is enabled)
+                if args.depth_mask and hard_human_mask is not None and hard_human_mask.any():
+                    # Resize hard_human_mask to match depth_map dimensions if needed
+                    mask_h, mask_w = hard_human_mask.shape
                     depth_h, depth_w = img_shape[0], img_shape[1]
                     
                     if mask_h != depth_h or mask_w != depth_w:
                         # Resize mask to match depth_map dimensions
-                        mask_torch = torch.from_numpy(human_mask).float().unsqueeze(0).unsqueeze(0)
+                        mask_torch = torch.from_numpy(hard_human_mask).float().unsqueeze(0).unsqueeze(0)
                         mask_resized = F.interpolate(
                             mask_torch,
                             size=(depth_h, depth_w),
@@ -872,7 +915,7 @@ if __name__=='__main__':
                         human_mask_resized = mask_resized.cpu().numpy() > mask_thres
                     else:
                         # Same size, just convert to bool if needed
-                        human_mask_resized = human_mask > mask_thres if human_mask.dtype == bool else human_mask > mask_thres
+                        human_mask_resized = hard_human_mask > mask_thres if hard_human_mask.dtype == bool else hard_human_mask > mask_thres
                     
                     # Flatten the mask to match depths shape
                     human_mask_flat = human_mask_resized.flatten()
@@ -881,10 +924,6 @@ if __name__=='__main__':
                     valid_mask = valid_mask & (~human_mask_flat)
                 
                 valid_depths = depths[valid_mask]
-                
-                if len(valid_depths) > 0:
-                    print(f"Frame {i} (RELOC): Depth range [{valid_depths.min():.3f}, {valid_depths.max():.3f}]")
-                    print(f"Frame {i} (RELOC): Valid depth pixels: {len(valid_depths)}/{len(depths)}")
             
             # In single threaded mode, make sure relocalization happen for every frame
             while config["single_thread"]:
@@ -992,12 +1031,8 @@ if __name__=='__main__':
                         
                         # Print clamp information
                         exceed_ratio = update_norm / clamp_threshold if clamp_threshold > 0 else float('inf')
-                        print(f"[EMA Clamp] Frame {i}: Update clamped! (exceeded by {exceed_ratio:.2f}x)")
-                        # print(f"  Base velocity: {base_velocity:.6f}, Threshold: {clamp_threshold:.6f}")
-                        # print(f"  Update norm: {update_norm:.6f} (exceeded by {update_norm - clamp_threshold:.6f})")
-                        # print(f"  Original update: [{x_update_orig:.6f}, {y_update_orig:.6f}, {z_update_orig:.6f}]")
-                        # print(f"  Clamped update:  [{x_update:.6f}, {y_update:.6f}, {z_update:.6f}]")
-                        print(f"  Scale factor: {scale:.4f} (clamped to {scale*100:.1f}% of original)")
+                        # print(f"[EMA Clamp] Frame {i}: Update clamped! (exceeded by {exceed_ratio:.2f}x)")
+                        # print(f"  Scale factor: {scale:.4f} (clamped to {scale*100:.1f}% of original)")
                     
                     # Apply clamped update
                     x_smooth = x_weighted + smooth_alpha * x_update
@@ -1024,7 +1059,7 @@ if __name__=='__main__':
                     smoothed_pose = (x_smooth, y_smooth, z_smooth, qx_smooth, qy_smooth, qz_smooth, qw_smooth)
 
             with open(traj_file, "a") as f:  # append
-                f.write(f"{naive_scaler} {x_smooth} {y_smooth} {z_smooth} {qx_smooth} {qy_smooth} {qz_smooth} {qw_smooth}\n")
+                f.write(f"{refined_scaler} {x_smooth} {y_smooth} {z_smooth} {qx_smooth} {qy_smooth} {qz_smooth} {qw_smooth}\n")
                 # f.write(f"{t} {x_smooth} {y_smooth} {z_smooth} {qx_smooth} {qy_smooth} {qz_smooth} {qw_smooth}\n")
             
             # Update SLAM internal pose with smoothed pose if requested
@@ -1050,7 +1085,7 @@ if __name__=='__main__':
                     x, y, z, qx, qy, qz, qw = T_WC.data.numpy().reshape(-1)
                     if len(keyframes)==2:
                         f.write("0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0\n")
-                    f.write(f"{naive_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
+                    f.write(f"{refined_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
 
             # In single threaded mode, wait for the backend to finish
             while config["single_thread"]:
@@ -1099,13 +1134,8 @@ if __name__=='__main__':
         pred_rotmat.append(frame_results['pred_rotmat'])
         pred_trans.append(frame_results['pred_trans'])
 
-        """
-        TODO(yiwen) 
-        camcoord_hmr = mp.process(target=function,args=())
-        camcoord_hmr.start()
-        """
         if i==0:
-            fix_scaler = naive_scaler
+            fix_scaler = refined_scaler
         # world coord camera trajectory
         current_camt = torch.tensor([fix_scaler*x_smooth, fix_scaler*y_smooth, fix_scaler*z_smooth]).unsqueeze(0)
         # current_camt = torch.tensor([fix_scaler*x, fix_scaler*y, fix_scaler*z]).unsqueeze(0)
@@ -1185,7 +1215,7 @@ if __name__=='__main__':
 
     # Save gif
     if visualize_hcgif:
-        imageio.mimsave(out_gif, imgs, fps=30)
+        imageio.mimsave(out_gif, imgs, fps=20)
         print(f"✅ Saved gif to {out_gif}")
 
     
