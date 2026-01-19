@@ -33,6 +33,10 @@
     # MoGe installation
     pip install git+https://github.com/microsoft/MoGe.git
 
+    # DEVA installation
+    cd ../Tracking-Anything-with-DEVA
+    pip install -e .
+
     cd ../..
     ```
 
@@ -86,10 +90,13 @@
 ```bash
 # inference
 python ./scripts/run_custom.py --video <YOUR/VIDEO/PATH>.mp4 --calib false --depth-mask
+
+# inference w tracking (multipersons)
+python ./scripts/run_custom_mt.py --video <YOUR/VIDEO/PATH>.mp4 --no-viz --calib false --depth-mask
 ```
 Results are saved to
 * ``./res_human_camera/global_results`` -- global optimized scene
-* ``./res_human_camera/*.npz`` -- camera coordinate human motion
+* ``./res_human_camera/{trackID}_{videoName}*.npz`` -- camera coordinate human motion
 * ``./logs/*.images_incremental_all.txt`` -- incremental camera extrinsics estimated by SLAM
 ```bash
 # visualization

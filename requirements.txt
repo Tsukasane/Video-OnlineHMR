@@ -34,3 +34,4 @@ termcolor==3.1.0
 gdown
 pybind11
 pytorch-minimize
+viser

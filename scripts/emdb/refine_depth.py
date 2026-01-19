@@ -65,8 +65,8 @@ def est_scale_hybrid(slam_depth_raw: np.ndarray,
     x0 = torch.tensor([scale])
     result = minimize(f, x0,  method='bfgs')
     scale = result.x.detach().cpu().item()
-    print(f"Depth scale estimation: robust opt {scale:.4f}")
+    # print(f"Depth scale estimation: robust opt {scale:.4f}")
     end_time = time.time()
-    print(f"Depth scale estimation time: {end_time - start_time:.2f} s")
+    # print(f"Depth scale estimation time: {end_time - start_time:.2f} s")
     
     return scale

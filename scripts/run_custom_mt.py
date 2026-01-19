@@ -18,7 +18,7 @@ if "DISPLAY" in os.environ:
     del os.environ["DISPLAY"]
 
 import open3d as o3d
-sys.path.insert(0, os.path.dirname(__file__) + '/../..')
+sys.path.insert(0, os.path.dirname(__file__) + '/..')
 sys.path.insert(0, './thirdparty/MASt3R-SLAM')
 import cv2
 import torch
@@ -34,7 +34,9 @@ import lietorch
 from lib.pipeline import video2frames
 import trimesh
 import imageio
+import torchvision
 
+from pycocotools import mask as masktool
 from mast3r_slam.global_opt import FactorGraph
 from mast3r_slam.config import load_config, config, set_global_config
 from mast3r_slam.dataloader import Intrinsics, load_dataset
@@ -45,33 +47,35 @@ from mast3r_slam.mast3r_utils import (
     load_retriever,
     mast3r_inference_mono,
 )
+from mast3r_slam.multiprocess_utils import new_queue, try_get_msg
 from mast3r_slam.tracker import FrameTracker
+from mast3r_slam.visualization import WindowMsg, run_visualization
 from mast3r_slam.lietorch_utils import as_SE3
 import torch.multiprocessing as mp
+from lib.models import get_hmr_vimo
 from pytorch3d.transforms import quaternion_to_matrix
 
 # from lib.camera import run_metric_slam, align_cam_to_world
-from lib.pipeline.tools import arrange_boxes
+from lib.pipeline.tools import arrange_boxes, box_iou
 from lib.utils.utils_detectron2 import DefaultPredictor_Lazy
 
 from lib.utils.eval_utils import *
 from lib.vis.traj import *
 
+from lib.pipeline.deva_track import get_deva_tracker, track_with_mask, flush_buffer
 from torch.amp import autocast
 from detectron2.config import LazyConfig
 from segment_anything import SamPredictor, sam_model_registry
 
 """
-python ./scripts/emdb/run_custom.py --video ./tdance.mp4 --calib false --smooth-method none
-python ./scripts/emdb/run_custom.py --video ./rock_climbing1.mp4 --calib false --smooth-method ema
+python ./scripts/run_custom_mt.py --video double_test2.mp4 --no-viz --calib false --depth-mask
 """
 
-single_color1 = [
-    [1.0, 0.2, 0.0],
-]
-single_color2 = [
-    [0.0, 0.8, 1.0],
-]
+single_color1 = [[1.0, 0.2, 0.0]]
+single_color2 = [[0.0, 0.8, 1.0]]
+
+iou_thresh = 0.5
+conf_thresh = 0.5
 
 def quaternion_translation_to_Sim3(t, q, device):
     """
@@ -109,8 +113,6 @@ def quaternion_translation_to_Sim3(t, q, device):
 
 
 def relocalization(frame, keyframes, factor_graph, retrieval_database):
-    # we are adding and then removing from the keyframe, so we need to be careful.
-    # The lock slows viz down but safer this way...
     with keyframes.lock:
         kf_idx = []
         retrieval_inds = retrieval_database.update(
@@ -228,7 +230,7 @@ def run_backend(cfg, model_path_or_model, states, keyframes, K):
 
         kf_idx = set(kf_idx)  # Remove duplicates by using set
         kf_idx.discard(idx)  # Remove current kf idx if included
-        kf_idx = list(kf_idx)  # convert to list
+        kf_idx = list(kf_idx)
         frame_idx = [idx] * len(kf_idx)
         if kf_idx:
             factor_graph.add_factors(
@@ -254,7 +256,7 @@ def init_detector():
     detectron2_cfg.train.init_checkpoint = "https://dl.fbaipublicfiles.com/detectron2/ViTDet/COCO/cascade_mask_rcnn_vitdet_h/f328730692/model_final_f05665.pkl"
     for i in range(3):
         detectron2_cfg.model.roi_heads.box_predictors[i].test_score_thresh = 0.25
-    detector = DefaultPredictor_Lazy(detectron2_cfg)
+    detector = DefaultPredictor_Lazy(detectron2_cfg) # to cuda here
     detector.model.eval()
     return detector
 
@@ -268,10 +270,7 @@ def init_sam(device):
 
 
 def bbox_est(center, scale, img_focal, img_center):
-    '''
-    Pixel representation
-    '''
-    # Original image center
+    # approximate image center
     img_cx, img_cy = img_center[:,0], img_center[:,1]
 
     # Implement CLIFF (Li et al.) bbox feature
@@ -288,88 +287,13 @@ def camera_coord_HMR(hmr_model, imgfiles, boxes, cache, img_focal, img_center):
                     img_focal=img_focal, img_center=img_center, cache=cache)
     
     return results, cache
-
-
-def run_hmr_process(hmr_input_queue, hmr_output_queue, checkpoint_path, device_str):
-    """
-    HMR process for parallel processing.
-    
-    Args:
-        hmr_input_queue: Queue for receiving HMR tasks (frame_id, imgfile, boxes, img_focal, img_center)
-        hmr_output_queue: Queue for sending HMR results (frame_id, results_dict)
-        checkpoint_path: Path to HMR checkpoint
-        device_str: Device string (e.g., "cuda:0")
-    """
-    import torch
-    import numpy as np
-    from torch.amp import autocast
-    from lib.models import get_hmr_vimo
-    
-    # Load HMR model in this process
-    device = torch.device(device_str)
-    hmr_model = get_hmr_vimo(checkpoint=checkpoint_path)
-    hmr_model.eval()
-    
-    # Maintain cache in this process
-    frame_feat_cache = None
-    
-    # Define camera_coord_HMR locally for this process
-    def camera_coord_HMR_local(hmr_model, imgfiles, boxes, cache, img_focal, img_center):
-        results, cache = hmr_model.inference_chunk_ar(imgfiles, boxes,
-                        img_focal=img_focal, img_center=img_center, cache=cache)
-        return results, cache
-    
-    print(f"[HMR Process] Started on {device_str}")
-    
-    while True:
-        try:
-            # Get task from queue (with timeout to allow checking for termination)
-            try:
-                task = hmr_input_queue.get(timeout=0.1)
-            except:
-                continue
-            
-            # Check for termination signal
-            if task is None:
-                print("[HMR Process] Received termination signal")
-                break
-            
-            frame_id, imgfile, boxes, img_focal, img_center = task
-            
-            # Process HMR
-            with torch.no_grad():
-                with autocast('cuda'):
-                    img_ck = np.array([imgfile])
-                    box_ck = np.array([boxes]).reshape(-1, 5)
-                    
-                    frame_results, frame_feat_cache = camera_coord_HMR_local(
-                        hmr_model, img_ck, box_ck, frame_feat_cache, img_focal, img_center
-                    )
-            
-            # Send results back (convert tensors to CPU for serialization)
-            results_dict = {
-                'pred_cam': frame_results['pred_cam'].cpu(),
-                'pred_pose': frame_results['pred_pose'].cpu(),
-                'pred_shape': frame_results['pred_shape'].cpu(),
-                'pred_rotmat': frame_results['pred_rotmat'].cpu(),
-                'pred_trans': frame_results['pred_trans'].cpu(),
-            }
-            
-            hmr_output_queue.put((frame_id, results_dict))
-            
-        except Exception as e:
-            print(f"[HMR Process] Error: {e}")
-            import traceback
-            traceback.print_exc()
-            continue
-    
-    print("[HMR Process] Exiting")
     
 
 def load_camera_poses(cam_t, cam_q, scale=0.2, color_offset=0, gt=True):
     """
     Load camera poses from text file.
-    Each line: tx ty tz qx qy qz qw
+    cam_t: tx ty tz 
+    cam_q: qx qy qz qw
     Returns a list of LineSet pyramids.
     """
     
@@ -401,7 +325,7 @@ def load_camera_poses(cam_t, cam_q, scale=0.2, color_offset=0, gt=True):
         cam.colors = o3d.utility.Vector3dVector([single_color1[0]] * len(cam_lines))
     else:
         cam.colors = o3d.utility.Vector3dVector([single_color2[0]] * len(cam_lines))
-        # incremental color along the time sequence
+        ## [Option] incremental color along the time sequence
         # cam.colors = o3d.utility.Vector3dVector([rainbow_colors[(l_id + color_offset) % 20]] * len(cam_lines))
 
     return cam
@@ -471,9 +395,9 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--split', type=int, default=2)
     parser.add_argument("--save-as", default="default")
-    parser.add_argument('--output_dir', type=str, default='results/emdb/camera')
     parser.add_argument("--config", default="configs/base.yaml")
     parser.add_argument("--save_dir", default="./res_human_camera")
+    parser.add_argument("--no-viz", action="store_true")
     parser.add_argument("--calib", type=bool)
     parser.add_argument("--video", type=str, required=True, help="path to the input video")
     parser.add_argument("--smooth-method", type=str, default='ema', 
@@ -500,18 +424,16 @@ if __name__=='__main__':
                        help='Sigma for Gaussian blur in mask processing (default: 5.0)')
     parser.add_argument("--mask-dilation-iterations", type=int, default=3,
                        help='Number of dilation iterations for mask processing (default: 3)')
+    parser.add_argument("--depth-mask", action="store_true",
+                       help='Apply human mask to depth maps (SLAM depth and metric depth) when computing scaler')
 
     args = parser.parse_args()
 
     load_config(args.config)
-    # print(config)
-
-    savefolder = args.output_dir
-    os.makedirs(savefolder, exist_ok=True)
 
     detector = init_detector() # ViTDet
     sam_predictor = init_sam(device) # SAM for human mask
-    # HMR model will be loaded in HMR process, not here
+    hmr_model = get_hmr_vimo(checkpoint='./results/onlinehmr/checkpoint.pth.tar')
     metric_depth_model = load_mogev2_model(device)
     
     # Load MASt3R-SLAM model once for all sequences (shared across sequences)
@@ -525,8 +447,10 @@ if __name__=='__main__':
     smpl = SMPL()
     smpls = {g:SMPL(gender=g) for g in ['neutral', 'male', 'female']}
 
-    # Estimate camera motion on EMDB (subset: spl)
+    # Estimate camera motion on EMDB
     manager = mp.Manager()
+    main2viz = new_queue(manager, args.no_viz)
+    viz2main = new_queue(manager, args.no_viz)
     print(f'Running on custom video...')
 
     print(f"Split video to frames and register camera calibration")
@@ -537,8 +461,10 @@ if __name__=='__main__':
 
     seq_folder = f'results/{seq}'
     img_folder = f'{seq_folder}/images'
+    depth_img_folder = f'{seq_folder}/depth_images'
     os.makedirs(seq_folder, exist_ok=True)
     os.makedirs(img_folder, exist_ok=True)
+    os.makedirs(depth_img_folder, exist_ok=True)
 
     print('Extracting frames ...')
     nframes = video2frames(file, img_folder)
@@ -551,7 +477,7 @@ if __name__=='__main__':
     img_h, img_w = cv2.imread(imgfiles[0]).shape[:2]
     dataset = load_dataset(img_folder)
     dataset.subsample(config["dataset"]["subsample"]) # set to 1 by default
-    rimg_h, rimg_w = dataset.get_img_shape()[0] # resized image and resized shape
+    rimg_h, rimg_w = dataset.get_img_shape()[0] # resized shape
 
     # Allow configurable buffer size for long videos
     # Default is 512, but can be increased via config
@@ -559,11 +485,16 @@ if __name__=='__main__':
     keyframes = SharedKeyframes(manager, rimg_h, rimg_w, buffer=max_keyframes)
     states = SharedStates(manager, rimg_h, rimg_w)
     
-    # Use the pre-loaded model (already share_memory() called globally)
-    # Each sequence has its own backend process that accesses this shared model
-    # model = mast3r_model
+    if not args.no_viz: # TODO(yiwen) remove this
+        viz = mp.Process(
+            target=run_visualization,
+            args=(config, states, keyframes, main2viz, viz2main),
+        )
+        viz.start()
+    
+    ## init intrinsics
     has_calib = dataset.has_calib()
-    use_calib = config["use_calib"]
+    use_calib = config["use_calib"] # set to false by default
 
     if use_calib and not has_calib:
         print("[Warning] No calibration provided for this dataset!")
@@ -577,20 +508,17 @@ if __name__=='__main__':
             device, dtype=torch.float32
         )
         keyframes.set_intrinsics(K)
-        # Extract focal length and center from calibration
         K_np = dataset.camera_intrinsics.K_frame
         img_focal = (K_np[0, 0] + K_np[1, 1]) / 2.0
         img_center = K_np[:2, 2]
     else:
         # Simple heuristic based on image dimensions. Does not support fov change
-        # Most cameras have focal length roughly 0.7-1.0 * max(width, height)
         img_focal = max(img_w, img_h) * 0.8  # Rough estimate: 80% of max dimension
         img_center = np.array([img_w / 2., img_h / 2.])
         print(f"[Info] No calibration provided. SLAM does not estimate intrinsics.")
         print(f"[Info] Using heuristic focal length for HMR: {img_focal:.1f} pixels (estimated from image size)")
-        
 
-    if dataset.save_results: # remove previously saved results
+    if dataset.save_results:
         save_dir, seq_name = eval.prepare_savedir(args, dataset)
         traj_file = save_dir / f"{seq_name}.txt"
         recon_file = save_dir / f"{seq_name}.ply"
@@ -600,27 +528,12 @@ if __name__=='__main__':
             recon_file.unlink()
     
     tracker = FrameTracker(mast3r_model, keyframes, device)
-
-    # Create HMR queues for parallel processing
-    hmr_input_queue = manager.Queue()
-    hmr_output_queue = manager.Queue()
-    
-    # HMR results cache: {frame_id: results_dict}
-    hmr_results_cache = {}
-    next_expected_frame_id = 0
+    last_msg = WindowMsg()
 
     # start backend
     backend_model_arg = None  # Backend will load model fresh in its own process
     backend = mp.Process(target=run_backend, args=(config, backend_model_arg, states, keyframes, K))
     backend.start()
-    
-    # start HMR process
-    hmr_checkpoint = './results/onlinehmr/checkpoint.pth.tar'  # NOTE(yiwen) change inference checkpoint path here.
-    hmr_process = mp.Process(
-        target=run_hmr_process,
-        args=(hmr_input_queue, hmr_output_queue, hmr_checkpoint, device)
-    )
-    hmr_process.start()
 
     # NOTE(yiwen) frontend loop, incrementally loop all frames
     i = 0
@@ -636,7 +549,9 @@ if __name__=='__main__':
     pred_rotmat = []
     pred_trans = []
 
+    frame_feat_cache = None
     naive_scaler = 1.0 # init depth-based scaler
+    refined_scaler = 1.0 # refined depth-based scaler
     fix_scaler = 1.0
     imgs = [] # for rendered images
     
@@ -671,6 +586,8 @@ if __name__=='__main__':
     angle = 180
     w, h = 800, 600
     render_interval = 2
+    tracks = {}
+    results_dict = {}
 
     if visualize_hcgif:
         try:
@@ -694,25 +611,37 @@ if __name__=='__main__':
     while True:
         ###### Camera Pose SLAM --> output Cam_R, Cam_T, also camera coordinates absolute depth (then convert to world depth) ######
         mode = states.get_mode()
-        if i == len(dataset): # NOTE(yiwen) end of the dataset
+        msg = try_get_msg(viz2main)
+        last_msg = msg if msg is not None else last_msg
+        if last_msg.is_terminated:
+            states.set_mode(Mode.TERMINATED)
+            break
+        if last_msg.is_paused and not last_msg.next:
+            states.pause()
+            time.sleep(0.01)
+            continue
+        if not last_msg.is_paused:
+            states.unpause()
+        if i == len(dataset): # end of the dataset
             states.set_mode(Mode.TERMINATED)
             break
 
         timestamp, img = dataset[i] # the original size, 0-1 scale
         img_cv2 = dataset.read_img(i) # the original size, 0-255 scale
-
         depth_img = img.copy()
-        # SAM mask
         boxes_np = None
         human_mask = None  # Store mask for confidence masking in flow space
 
+        # -- Detection --
         with torch.no_grad():
             with autocast('cuda'):
                 det_out = detector(img_cv2)
                 det_instances = det_out['instances']
                 valid_idx = (det_instances.pred_classes==0) & (det_instances.scores > 0.5)
+
                 boxes_np = det_instances.pred_boxes.tensor[valid_idx].cpu().numpy()
 
+        # -- SAM --
         if boxes_np is not None and boxes_np.shape[0] > 0:
             with autocast('cuda'):
                 sam_predictor.set_image(img_cv2, image_format='BGR')
@@ -741,29 +670,8 @@ if __name__=='__main__':
                     # Apply soft mask: multiply image by (1 - soft_mask) to gradually fade out human regions
                     # soft_mask is [0,1] where 1 is human region, so (1 - soft_mask) is background weight
                     img = img * (1.0 - soft_mask[..., np.newaxis])  # Add channel dimension for broadcasting
-                    # Store soft_mask for confidence masking (use soft_mask instead of binary mask)
                     human_mask = soft_mask
 
-                    # if i==29:
-                    #     mask = human_mask.detach().cpu().numpy()
-                    #     img_np = img.detach().cpu().numpy() if hasattr(img, 'detach') else img
-
-                    #     # 归一化到 0-1 区间（如果是 0–255 图像）
-                    #     if img_np.max() > 1.5:
-                    #         img_np = img_np / 255.0
-
-                    #     overlay_color = np.array([0.0, 0.0, 0.0])
-
-                    #     # mask[..., None] 扩展为 3 通道，以便广播计算
-                    #     # 透明度 α = mask 值（0→透明, 1→完全红）
-                    #     overlay = img_np * (1 - mask[..., None]) + overlay_color * mask[..., None]
-
-                    #     plt.imshow(overlay)
-                    #     plt.axis('off')
-                    #     plt.title("Soft Mask Overlay (with Transparency)")
-                    #     plt.savefig("soft_mask_overlay.png", bbox_inches='tight', pad_inches=0)
-                    #     plt.close()
-                    #     breakpoint()
                 else:
                     # Hard mask: zero-out human regions directly
                     img[human_mask] = 0.0
@@ -781,7 +689,7 @@ if __name__=='__main__':
 
         # Mast3r-SLAM init
         if mode == Mode.INIT:
-            # Initialize via mono inference, and encoded features neeed for database
+            # Initialize via mono inference, and encoded features need for database
             X_init, C_init = mast3r_inference_mono(mast3r_model, frame)
             frame.update_pointmap(X_init, C_init)
             keyframes.append(frame)
@@ -816,10 +724,13 @@ if __name__=='__main__':
                 metric_depth = metric_depth_model.infer(depth_input_img)["depth"]
 
                 valid_depths = depths[valid_mask]
-                print(f"debug -- before human mask scaler: {metric_depth.min() / valid_depths.min()}")
+                if len(valid_depths) > 0 and valid_depths.min() > 0:
+                    print(f"debug -- before human mask scaler: {metric_depth.min() / valid_depths.min()}")
+                else:
+                    print(f"debug -- before human mask scaler: valid_depths is empty or contains zero")
                 
-                # Also remove human region from SLAM depths
-                if hard_human_mask is not None and hard_human_mask.any():
+                # Also remove human region from SLAM depths (only if --depth-mask is enabled)
+                if args.depth_mask and hard_human_mask is not None and hard_human_mask.any():
                     mask_h, mask_w = hard_human_mask.shape
                     depth_h, depth_w = img_shape[0], img_shape[1]
                     
@@ -839,17 +750,19 @@ if __name__=='__main__':
                     # Flatten the mask to match depths shape
                     human_mask_flat = human_mask_resized.flatten()
 
-                    # TODO(yiwen) to see weather applying the human mask make a real difference
-                    # breakpoint()
-                    
                     # Exclude human regions from valid_mask
                     valid_mask = valid_mask & (~human_mask_flat)
                 
                 valid_depths = depths[valid_mask]
                 valid_confs = confidences[valid_mask]
+
+                # Prepare masked versions for est_scale_hybrid if --depth-mask is enabled
+                depth_map_for_scale = depth_map.copy()
+                metric_depth_for_scale = metric_depth.cpu().numpy() if isinstance(metric_depth, torch.Tensor) else metric_depth.copy()
+                metric_depth_min = None
                 
-                # Remove human region from metric depth before computing min
-                if hard_human_mask is not None and hard_human_mask.any():
+                # Remove human region from metric depth before computing min (only if --depth-mask is enabled)
+                if args.depth_mask and hard_human_mask is not None and hard_human_mask.any():
                     # Ensure metric_depth is 2D (H, W)
                     if metric_depth.dim() > 2:
                         metric_depth_2d = metric_depth.squeeze()
@@ -865,60 +778,80 @@ if __name__=='__main__':
                         if mask_h != metric_h or mask_w != metric_w:
                             # Resize mask to match metric_depth dimensions
                             mask_torch = torch.from_numpy(hard_human_mask).float().unsqueeze(0).unsqueeze(0)
-                            mask_resized = F.interpolate(
+                            mask_resized_metric = F.interpolate(
                                 mask_torch,
                                 size=(metric_h, metric_w),
                                 mode='bilinear',
                                 align_corners=False
                             ).squeeze(0).squeeze(0)
-                            human_mask_resized = mask_resized.cpu().numpy() > mask_thres
+                            human_mask_resized_metric = mask_resized_metric.cpu().numpy() > mask_thres
                         else:
-                            human_mask_resized = hard_human_mask > mask_thres if hard_human_mask.dtype == bool else hard_human_mask > mask_thres
+                            human_mask_resized_metric = hard_human_mask > mask_thres if hard_human_mask.dtype == bool else hard_human_mask > mask_thres
                         
                         # Mask out human regions: set to a large value so they're ignored in min()
                         if isinstance(metric_depth_2d, torch.Tensor):
                             metric_depth_masked = metric_depth_2d.clone().cpu().numpy()
                         else:
                             metric_depth_masked = metric_depth_2d.copy()
-                        metric_depth_masked[human_mask_resized] = np.inf
-                        # breakpoint()
+                        metric_depth_masked[human_mask_resized_metric] = np.inf
                         valid_metric_depths = metric_depth_masked[metric_depth_masked != np.inf]
                         if len(valid_metric_depths) > 0:
                             metric_depth_min = np.min(valid_metric_depths)
                         else:
                             # Fallback: if all values are masked, use original min
                             metric_depth_min = metric_depth.min().item() if isinstance(metric_depth, torch.Tensor) else metric_depth.min()
+                        
+                        # Use masked metric_depth for est_scale_hybrid
+                        metric_depth_for_scale = metric_depth_masked.copy()
                     else:
                         # If mask is not available or empty, use original min
                         metric_depth_min = metric_depth.min().item() if isinstance(metric_depth, torch.Tensor) else metric_depth.min()
                 else:
                     # No human mask, use original min
                     metric_depth_min = metric_depth.min().item() if isinstance(metric_depth, torch.Tensor) else metric_depth.min()
+
+                # Apply mask to depth_map for est_scale_hybrid if --depth-mask is enabled
+                if args.depth_mask and hard_human_mask is not None and hard_human_mask.any():
+                    # Create masked version of depth_map (set human regions to 0 to exclude from scale estimation)
+                    depth_map_masked = depth_map.copy()
+                    if 'human_mask_resized' in locals():
+                        depth_map_masked[human_mask_resized] = 0.0
+                    else:
+                        # resize the mask
+                        mask_h, mask_w = hard_human_mask.shape
+                        depth_h, depth_w = depth_map.shape
+                        if mask_h == depth_h and mask_w == depth_w:
+                            depth_map_masked[hard_human_mask > mask_thres] = 0.0
+                        else:
+                            mask_torch = torch.from_numpy(hard_human_mask).float().unsqueeze(0).unsqueeze(0)
+                            mask_resized = F.interpolate(
+                                mask_torch,
+                                size=(depth_h, depth_w),
+                                mode='bilinear',
+                                align_corners=False
+                            ).squeeze(0).squeeze(0)
+                            human_mask_resized_for_depth = mask_resized.cpu().numpy() > mask_thres
+                            depth_map_masked[human_mask_resized_for_depth] = 0.0
+                    depth_map_for_scale = depth_map_masked
+            
+                # Use est_scale_hybrid for refined scaler estimation
+                from emdb.refine_depth import est_scale_hybrid
+                refined_scaler = est_scale_hybrid(
+                    slam_depth_raw=depth_map_for_scale,
+                    pred_depth=metric_depth_for_scale
+                )
+                if len(valid_depths) > 0 and valid_depths.min() > 0:
+                    naive_scaler = metric_depth_min / valid_depths.min()
+                else:
+                    print(f"Warning: valid_depths is empty or contains zero, using refined_scaler")
+                    naive_scaler = refined_scaler if refined_scaler > 0 else 1.0
                 
-
-                if len(metric_depth) > 0:
-                    if visualize_depth and (i % 10 == 0):  # Save every 10th frame
-                        metric_depth_normalized = (metric_depth - metric_depth.min()) / (metric_depth.max() - metric_depth.min())
-                        metric_depth_normalized = metric_depth_normalized.detach().cpu().numpy()
-                        metric_depth_uint8 = (metric_depth_normalized * 255).astype(np.uint8)
-                        cv2.imwrite(f"mdepth_frame_{i:06d}.png", metric_depth_uint8)
-
-                naive_scaler = metric_depth_min / valid_depths.min()
-                print(f"debug -- after human mask scaler: {naive_scaler}")
-
                 """
                 slam depth * scale = pred depth
 
                 pred_cam_t = torch.tensor(traj[:, :3]) * scale
                 pred_cam_q = torch.tensor(traj[:, 3:])
                 """
-                
-                # visualization of the SLAM depth
-                if len(valid_depths) > 0:
-                    if visualize_depth and (i % 10 == 0):  # Save every 10th frame
-                        depth_normalized = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
-                        depth_uint8 = (depth_normalized * 255).astype(np.uint8)
-                        cv2.imwrite(f"depth_frame_{i:06d}.png", depth_uint8)
 
         # Mast3r-SLAM relocation          
         elif mode == Mode.RELOC:
@@ -938,15 +871,15 @@ if __name__=='__main__':
                 # Filter valid depths (remove invalid/negative depths)
                 valid_mask = depths > 0
                 
-                # Also remove human region from valid depths
-                if human_mask is not None and human_mask.any():
-                    # Resize human_mask to match depth_map dimensions if needed
-                    mask_h, mask_w = human_mask.shape
+                # Also remove human region from valid depths (only if --depth-mask is enabled)
+                if args.depth_mask and hard_human_mask is not None and hard_human_mask.any():
+                    # Resize hard_human_mask to match depth_map dimensions if needed
+                    mask_h, mask_w = hard_human_mask.shape
                     depth_h, depth_w = img_shape[0], img_shape[1]
                     
                     if mask_h != depth_h or mask_w != depth_w:
                         # Resize mask to match depth_map dimensions
-                        mask_torch = torch.from_numpy(human_mask).float().unsqueeze(0).unsqueeze(0)
+                        mask_torch = torch.from_numpy(hard_human_mask).float().unsqueeze(0).unsqueeze(0)
                         mask_resized = F.interpolate(
                             mask_torch,
                             size=(depth_h, depth_w),
@@ -956,19 +889,13 @@ if __name__=='__main__':
                         human_mask_resized = mask_resized.cpu().numpy() > mask_thres
                     else:
                         # Same size, just convert to bool if needed
-                        human_mask_resized = human_mask > mask_thres if human_mask.dtype == bool else human_mask > mask_thres
+                        human_mask_resized = hard_human_mask > mask_thres if hard_human_mask.dtype == bool else hard_human_mask > mask_thres
                     
                     # Flatten the mask to match depths shape
                     human_mask_flat = human_mask_resized.flatten()
-                    
-                    # Exclude human regions from valid_mask
                     valid_mask = valid_mask & (~human_mask_flat)
                 
                 valid_depths = depths[valid_mask]
-                
-                if len(valid_depths) > 0:
-                    print(f"Frame {i} (RELOC): Depth range [{valid_depths.min():.3f}, {valid_depths.max():.3f}]")
-                    print(f"Frame {i} (RELOC): Valid depth pixels: {len(valid_depths)}/{len(depths)}")
             
             # In single threaded mode, make sure relocalization happen for every frame
             while config["single_thread"]:
@@ -1014,20 +941,15 @@ if __name__=='__main__':
                         velocities.append(np.array([dx, dy, dz]))
                     
                     if len(velocities) > 0:
-                        # Compute velocity magnitudes
                         velocity_magnitudes = np.array([np.linalg.norm(v) for v in velocities])
-                        
-                        # Choose statistical measure based on clamp mode (more conservative = stricter)
-                        base_velocity = np.median(velocity_magnitudes)  # Default to median
+                        base_velocity = np.median(velocity_magnitudes)
                         
                         # Clamp threshold based on velocity
                         clamp_threshold = base_velocity * ema_clamp_multiplier
                         
-                        # Apply absolute maximum if specified (additional hard limit)
                         if ema_clamp_absolute_max is not None:
                             clamp_threshold = min(clamp_threshold, ema_clamp_absolute_max)
                         
-                        # Additional statistics for debugging
                         avg_velocity = np.mean(velocity_magnitudes)
                         max_velocity = np.max(velocity_magnitudes)
                         median_velocity = np.median(velocity_magnitudes)
@@ -1049,7 +971,12 @@ if __name__=='__main__':
                     n_history = len(ema_history_buffer)
                     
                     weights = np.array([(1 - smooth_alpha) ** (n_history - 1 - i) for i in range(n_history)])
-                    weights = weights / weights.sum()  # Normalize
+                    weights_sum = weights.sum()
+                    if weights_sum > 0:
+                        weights = weights / weights_sum  # Normalize
+                    else:
+                        # Fallback: equal weights if sum is zero (shouldn't happen normally)
+                        weights = np.ones(n_history) / n_history
                     
                     # Weighted average of translation
                     x_weighted = sum(w * p[0] for w, p in zip(weights, ema_history_buffer))
@@ -1076,12 +1003,8 @@ if __name__=='__main__':
                         
                         # Print clamp information
                         exceed_ratio = update_norm / clamp_threshold if clamp_threshold > 0 else float('inf')
-                        print(f"[EMA Clamp] Frame {i}: Update clamped! (exceeded by {exceed_ratio:.2f}x)")
-                        # print(f"  Base velocity: {base_velocity:.6f}, Threshold: {clamp_threshold:.6f}")
-                        # print(f"  Update norm: {update_norm:.6f} (exceeded by {update_norm - clamp_threshold:.6f})")
-                        # print(f"  Original update: [{x_update_orig:.6f}, {y_update_orig:.6f}, {z_update_orig:.6f}]")
-                        # print(f"  Clamped update:  [{x_update:.6f}, {y_update:.6f}, {z_update:.6f}]")
-                        print(f"  Scale factor: {scale:.4f} (clamped to {scale*100:.1f}% of original)")
+                        # print(f"[EMA Clamp] Frame {i}: Update clamped! (exceeded by {exceed_ratio:.2f}x)")
+                        # print(f"  Scale factor: {scale:.4f} (clamped to {scale*100:.1f}% of original)")
                     
                     # Apply clamped update
                     x_smooth = x_weighted + smooth_alpha * x_update
@@ -1108,7 +1031,7 @@ if __name__=='__main__':
                     smoothed_pose = (x_smooth, y_smooth, z_smooth, qx_smooth, qy_smooth, qz_smooth, qw_smooth)
 
             with open(traj_file, "a") as f:  # append
-                f.write(f"{naive_scaler} {x_smooth} {y_smooth} {z_smooth} {qx_smooth} {qy_smooth} {qz_smooth} {qw_smooth}\n")
+                f.write(f"{refined_scaler} {x_smooth} {y_smooth} {z_smooth} {qx_smooth} {qy_smooth} {qz_smooth} {qw_smooth}\n")
                 # f.write(f"{t} {x_smooth} {y_smooth} {z_smooth} {qx_smooth} {qy_smooth} {qz_smooth} {qw_smooth}\n")
             
             # Update SLAM internal pose with smoothed pose if requested
@@ -1133,8 +1056,8 @@ if __name__=='__main__':
                     T_WC = as_SE3(frame.T_WC)
                     x, y, z, qx, qy, qz, qw = T_WC.data.numpy().reshape(-1)
                     if len(keyframes)==2:
-                        f.write("0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0\n") #TODO(yiwen) may need to make to first one to 1
-                    f.write(f"{naive_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
+                        f.write("0.0 0.0 0.0 0.0 0.0 0.0 0.0 1.0\n")
+                    f.write(f"{refined_scaler} {x} {y} {z} {qx} {qy} {qz} {qw}\n")
 
             # In single threaded mode, wait for the backend to finish
             while config["single_thread"]:
@@ -1157,154 +1080,178 @@ if __name__=='__main__':
                 boxes = np.hstack([boxes, confs[:, None]])
                 boxes = arrange_boxes(boxes, mode='size', min_size=100)
 
-        # Submit HMR task to queue (parallel with SLAM)
-        if boxes.shape[0] >= 1:
-            # TODO(yiwen) multiple persons 的时候还是需要一下tracking？否则会检测出来多个bounding boxes，confidence都足够高，这种情况下应该不能直接用bbox去筛选
-            # 或者用bbox center过滤一下
-            if boxes.shape[0] > 1:  # when multiple person detected
-                boxes = boxes[0:1]
+        # Initialize DEVA tracker once (outside loop, if not already initialized)
+        if boxes.shape[0] > 1:  # when multiple person detected
+            # Check if we need to initialize DEVA tracker (use global variables)
+            if '_deva_initialized' not in globals():
+                print(f"detect multiple persons, init tracking")
+                vid_length = len(imgfiles)
+                globals()['_deva'], globals()['_result_saver'] = get_deva_tracker(
+                    vid_length, "./output_deva", online_mode=True
+                )
+                globals()['_deva_initialized'] = True
+                globals()['_deva_track_with_mask'] = track_with_mask
             
-            # Submit task to HMR process
-            hmr_input_queue.put((i, imgfiles[i], boxes, img_focal, img_center))
-        
-        # Check for completed HMR results (non-blocking)
-        import queue
-        while True:
-            try:
-                frame_id, results_dict = hmr_output_queue.get_nowait()
-                hmr_results_cache[frame_id] = results_dict
-            except queue.Empty:
-                break
-            except Exception as e:
-                print(f"[Main] Error receiving HMR result: {e}")
-                break
-        
-        # Process results in order (wait for current frame's HMR result if needed)
-        frame_results = None
-        if i in hmr_results_cache:
-            frame_results = hmr_results_cache.pop(i)
-            # Move tensors back to device (they were moved to CPU for queue serialization)
-            pred_cam.append(frame_results['pred_cam'].to(device))
-            pred_pose.append(frame_results['pred_pose'].to(device))
-            pred_shape.append(frame_results['pred_shape'].to(device))
-            pred_rotmat.append(frame_results['pred_rotmat'].to(device))
-            pred_trans.append(frame_results['pred_trans'].to(device))
-        elif boxes.shape[0] >= 1:
-            # HMR result not ready yet, wait for it
-            # This should be rare if HMR is faster than SLAM, but we handle it
-            while i not in hmr_results_cache:
-                try:
-                    frame_id, results_dict = hmr_output_queue.get(timeout=0.1)
-                    hmr_results_cache[frame_id] = results_dict
-                except:
-                    time.sleep(0.01)
-                    continue
-            frame_results = hmr_results_cache.pop(i)
-            # Move tensors back to device
-            pred_cam.append(frame_results['pred_cam'].to(device))
-            pred_pose.append(frame_results['pred_pose'].to(device))
-            pred_shape.append(frame_results['pred_shape'].to(device))
-            pred_rotmat.append(frame_results['pred_rotmat'].to(device))
-            pred_trans.append(frame_results['pred_trans'].to(device))
+            # Filter high confidence detections for tracking
+            high_conf_mask = boxes[:, -1] > 0.80
+            if high_conf_mask.sum() > 0:
+                track_valid = high_conf_mask
+                masks_track = masks[track_valid] # 2, 652, 690
+                scores_track = scores[track_valid] # (num_person, 1)
+                boxes_track = boxes[track_valid] # (num_person, 5)
+
+                img_rgb = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
+                imgpath = imgfiles[i] if imgfiles else None
+                
+                with autocast('cuda'):
+                    # Get tracking result (returns dict with 'prob', 'object_ids', etc.)
+                    globals()['_deva_track_with_mask'](
+                        globals()['_deva'], masks_track, scores_track, img_rgb,
+                        imgpath, globals()['_result_saver'], i, 
+                        save_vos=True, online_mode=True)
+                
+                # Match detection boxes to tracking results
+                det_boxes = boxes_track[:, :4]  # [N, 4] x1, y1, x2, y2
+                det_confs = boxes_track[:, -1]   # [N] confidence scores
+                
+                img_ck_dict = {}
+                box_ck_dict = {}
+
+                # match tracked segment to detections
+                vjson = globals()['_result_saver'].video_json
+                ann = vjson['annotations']
+
+                if len(ann)>0:
+                    frame_ann = vjson['annotations'][0]
+                    seg = frame_ann['segmentations']
+                    file = frame_ann['file_name']
+                    for subj in seg:  
+                        idx = subj['id']
+                        msk = subj['rle']
+                        msk = torch.from_numpy(masktool.decode(msk))[None]
+                        
+                        if len(det_boxes)>0:
+                            seg_box = torchvision.ops.masks_to_boxes(msk)
+                            iou = box_iou(det_boxes, seg_box)
+                            max_iou, max_id = iou.max(), iou.argmax()
+                            max_conf = det_boxes[max_id, -1]
+                        else:
+                            max_iou = max_conf = 0
+                        if max_iou>iou_thresh and max_conf>conf_thresh:
+                            det = True
+                            det_box = det_boxes[[max_id]]
+                        else:
+                            det = False
+                            det_box = np.zeros([1, 5])
+
+                        # add fields
+                        subj['frame'] = frame 
+                        subj['det'] = det
+                        subj['det_box'] = det_box
+                        subj['seg_box'] = seg_box.numpy()
+                        
+                        if idx in tracks:
+                            tracks[idx].append(subj)
+                        else:
+                            tracks[idx] = [subj]
+                
+                if len(tracks.keys()) > 0: 
+                    # if we have multiple person in this frame
+                    # 1) process them sequentially
+                    # 2) store cache separately according to tracking id
+                    for k, v in tracks.items():
+                        img_ck_dict[k] = np.array([imgfiles[i]])
+
+                        det_box_w_conf = np.hstack([tracks[k][-1]['det_box'], [[1]]])
+                        box_ck_dict[k] = det_box_w_conf
+                else:
+                    # Fallback: use first high-conf box if no matches
+                    img_ck_dict['-1'] = np.array([imgfiles[i]])
+                    box_ck_dict['-1'] = boxes_track[0:1] if len(boxes_track) > 0 else boxes[0:1]
+            else:
+                # No high confidence detections, use first box
+                img_ck_dict['-1'] = np.array([imgfiles[i]])
+                box_ck_dict['-1']  = boxes[0:1]
         else:
-            # No boxes detected, skip HMR processing
-            continue
+            # for single person
+            img_ck_dict['-1'] = np.array([imgfiles[i]])  # (1,)
+            box_ck_dict['-1'] = np.array([boxes]).reshape(-1, 5)  # (1, 5)
 
-        # Now we have both SLAM and HMR results, proceed with world coordinate transformation
-        if i==0:
-            fix_scaler = naive_scaler
-        # world coord camera trajectory
-        current_camt = torch.tensor([fix_scaler*x_smooth, fix_scaler*y_smooth, fix_scaler*z_smooth]).unsqueeze(0)
-        # current_camt = torch.tensor([fix_scaler*x, fix_scaler*y, fix_scaler*z]).unsqueeze(0)
-        current_camq = torch.tensor([qw_smooth, qx_smooth, qy_smooth, qz_smooth]).unsqueeze(0)
+        # Process HMR for all persons (img_ck and box_ck are now defined)
+        if len(img_ck_dict.keys()) > 0:
+            for pk in img_ck_dict.keys():
+                if pk not in results_dict:
+                    results_dict[pk] = {'pred_cam':[],
+                                        'pred_pose':[],
+                                        'pred_shape':[],
+                                        'pred_rotmat':[],
+                                        'pred_trans':[],
+                                        'cache':None}
 
-        current_camr = quaternion_to_matrix(current_camq)
-
-        # frame_results['pred_rotmat'] # T, 24, 3, 3
-        # frame_results['pred_shape'] # T, 10
-        # frame_results['pred_trans'] # T, 1, 3
-
-        pred = smpls['neutral'](body_pose=frame_results['pred_rotmat'][:,1:], 
-                                global_orient=frame_results['pred_rotmat'][:,[0]], 
-                                betas=frame_results['pred_shape'], 
-                                transl=frame_results['pred_trans'].squeeze(1),
-                                pose2rot=False,
-                                default_smpl=True)
-        pred_vert = pred.vertices
-        pred_j3d = pred.joints[:, :24]
-
-        # world coords human mesh
-        pred_vert_w = torch.einsum('bij,bnj->bni', current_camr, pred_vert) + current_camt[:,None] # 1, 6890, 3
-        pred_j3d_w = torch.einsum('bij,bnj->bni', current_camr, pred_j3d) + current_camt[:,None] # 1, 24, 3 -- pose
-        pred_ori_w = torch.einsum('bij,bjk->bik', current_camr, frame_results['pred_rotmat'][:,0]) # 1, 3, 3
-
-        # visualize human-camera gif
-        if visualize_hcgif and i % render_interval == 0:
-            # Remove i-2 geometry to avoid accumulation (keep only current and previous frame)
-            num_keep_frames = 1
-            prev_frame_idx = i - render_interval * num_keep_frames  # keep five previous frames
-            if prev_frame_idx >= 0:
-                try:
-                    render.scene.remove_geometry(f"human{prev_frame_idx}")
-                except:
-                    pass
-                try:
-                    render.scene.remove_geometry(f"cam_frame{prev_frame_idx}")
-                except:
-                    pass
+                frame_results, frame_feat_cache = camera_coord_HMR(
+                    hmr_model, img_ck_dict[pk], box_ck_dict[pk], results_dict[pk]['cache'], img_focal, img_center)
             
-            cam_frame = load_camera_poses(current_camt[0], current_camq[0]) # o3d camera
-            mesh = trimesh.Trimesh(vertices=pred_vert_w[0], faces=smpls['neutral'].faces)
-            human_mesh = o3d.geometry.TriangleMesh()
-            human_mesh.vertices = o3d.utility.Vector3dVector(mesh.vertices)
-            human_mesh.triangles = o3d.utility.Vector3iVector(mesh.faces)
-            human_mesh.compute_vertex_normals()
-            human_mesh.paint_uniform_color([0.8, 0.6, 0.6])
+                # NOTE(yiwen) two frame cache, shape[1] = h*w*mem_t
+                # print(f"cache length {frame_feat_cache['layers'][0]['mem_k'].shape}")
 
-            render.scene.add_geometry(f"human{i}", human_mesh, human_mat)
-            render.scene.add_geometry(f"cam_frame{i}", cam_frame, cam_mat)
+                results_dict[pk]['pred_cam'].append(frame_results['pred_cam'])
+                results_dict[pk]['pred_pose'].append(frame_results['pred_pose'])
+                results_dict[pk]['pred_shape'].append(frame_results['pred_shape'])
+                results_dict[pk]['pred_rotmat'].append(frame_results['pred_rotmat'])
+                results_dict[pk]['pred_trans'].append(frame_results['pred_trans'])
+                results_dict[pk]['cache'] = frame_feat_cache
 
-            if not set_render_camera:
-                center = human_mesh.get_center()
-                view_radius = 8
-                eye0 = center + np.array([view_radius, view_radius, view_radius])
-                radius = np.linalg.norm(eye0 - center)
+                if i==2: # double the first frame of tracked keys
+                    results_dict[pk]['pred_cam'].append(frame_results['pred_cam'])
+                    results_dict[pk]['pred_pose'].append(frame_results['pred_pose'])
+                    results_dict[pk]['pred_shape'].append(frame_results['pred_shape'])
+                    results_dict[pk]['pred_rotmat'].append(frame_results['pred_rotmat'])
+                    results_dict[pk]['pred_trans'].append(frame_results['pred_trans'])
 
-                # Yaw around the vertical (Y) axis, keeping camera above the object
-                theta = np.deg2rad(angle)
-                eye = center + radius * np.array([np.sin(theta), -0.2, np.cos(theta)])  # 0.2: small height above ground
-                up = np.array([0, 1, 0])  # keep world Y up
-                render.setup_camera(60, center, eye, up)
-                set_render_camera = True
-            img_o3d = render.render_to_image()
+                if i==0:
+                    fix_scaler = refined_scaler
+                # world coord camera trajectory
+                current_camt = torch.tensor([fix_scaler*x_smooth, fix_scaler*y_smooth, fix_scaler*z_smooth]).unsqueeze(0)
+                # current_camt = torch.tensor([fix_scaler*x, fix_scaler*y, fix_scaler*z]).unsqueeze(0)
+                current_camq = torch.tensor([qw_smooth, qx_smooth, qy_smooth, qz_smooth]).unsqueeze(0)
+                current_camr = quaternion_to_matrix(current_camq)
 
-            # flip vertically for correct image orientation
-            img_np = np.asarray(img_o3d)
-            img_np = np.flipud(img_np)
-            img_np = np.fliplr(img_np)
-            imgs.append(img_np)
+                # frame_results['pred_rotmat'] # T, 24, 3, 3
+                # frame_results['pred_shape'] # T, 10
+                # frame_results['pred_trans'] # T, 1, 3
 
-        # print FPS per 30 frames
-        if i % 30 == 0:
-            FPS = i / (time.time() - fps_timer)
-            print(f"FPS: {FPS}")
+                pred = smpls['neutral'](body_pose=frame_results['pred_rotmat'][:,1:], 
+                                        global_orient=frame_results['pred_rotmat'][:,[0]], 
+                                        betas=frame_results['pred_shape'], 
+                                        transl=frame_results['pred_trans'].squeeze(1),
+                                        pose2rot=False,
+                                        default_smpl=True)
+                pred_vert = pred.vertices
+                pred_j3d = pred.joints[:, :24]
+
+                # world coords human mesh
+                pred_vert_w = torch.einsum('bij,bnj->bni', current_camr, pred_vert) + current_camt[:,None] # 1, 6890, 3
+                pred_j3d_w = torch.einsum('bij,bnj->bni', current_camr, pred_j3d) + current_camt[:,None] # 1, 24, 3 -- pose
+                pred_ori_w = torch.einsum('bij,bjk->bik', current_camr, frame_results['pred_rotmat'][:,0]) # 1, 3, 3
+
+        # update frame ids
         i += 1
-
-    # Save gif
-    if visualize_hcgif:
-        imageio.mimsave(out_gif, imgs, fps=30)
-        print(f"✅ Saved gif to {out_gif}")
-
     
+    with autocast('cuda'):
+        flush_buffer(globals()['_deva'], globals()['_result_saver'])
+    globals()['_result_saver'].end()
+
     ###### Save Global Results ######
     # cam coord results of the whole sequence, for eval
     os.makedirs(args.save_dir, exist_ok=True)
-    cam_coord_results = {'pred_cam': torch.cat(pred_cam).cpu().numpy(),
-            'pred_pose': torch.cat(pred_pose).cpu().numpy(),
-            'pred_shape': torch.cat(pred_shape).cpu().numpy(),
-            'pred_rotmat': torch.cat(pred_rotmat).cpu().numpy(),
-            'pred_trans': torch.cat(pred_trans).cpu().numpy()}
-    np.savez(f'{args.save_dir}/{name_prefix}.npz', **cam_coord_results)
+    for pk in results_dict.keys():
+        print(f"Multiple persons detected, save all poses.")
+        cam_coord_results = {'pred_cam': torch.cat(results_dict[pk]['pred_cam']),
+                'pred_pose': torch.cat(results_dict[pk]['pred_pose']),
+                'pred_shape': torch.cat(results_dict[pk]['pred_shape']),
+                'pred_rotmat': torch.cat(results_dict[pk]['pred_rotmat']),
+                'pred_trans': torch.cat(results_dict[pk]['pred_trans'])}
+        np.savez(f'{args.save_dir}/{pk}_{name_prefix}.npz', **cam_coord_results)
 
     # the final cam pose and scene pc after global optimization
     if dataset.save_results:
@@ -1316,31 +1263,21 @@ if __name__=='__main__':
             cam_savedir,
             f"{name_prefix}_{seq_name}.ply",
             keyframes,
-            1.5,  # C_conf_threshold default value
+            last_msg.C_conf_threshold,
         )
 
     print("done")
     
-    # Send termination signal to HMR process
-    print("Terminating HMR process...")
-    hmr_input_queue.put(None)  # Send termination signal
-    
-    # Wait for HMR process to finish
-    timeout = 30
-    start_time = time.time()
-    while hmr_process.is_alive() and (time.time() - start_time) < timeout:
-        time.sleep(0.1)
-    
-    if hmr_process.is_alive():
-        print("Warning: HMR process did not finish, terminating...")
-        hmr_process.terminate()
-        hmr_process.join()
-    else:
-        hmr_process.join()
-        print("HMR process joined")
+    # Send termination signal to viz
+    if not args.no_viz:
+        try:
+            main2viz.put(WindowMsg(is_terminated=True), timeout=1)
+        except:
+            pass
     
     # Wait for processes to finish with timeout
     print("Waiting for backend to finish...")
+    timeout = 30
     start_time = time.time()
     
     while backend.is_alive() and (time.time() - start_time) < timeout:
@@ -1354,11 +1291,28 @@ if __name__=='__main__':
         backend.join()
         print("Backend joined")
     
+    if not args.no_viz:
+        print("Waiting for visualization to finish...")
+        start_time = time.time()
+        while viz.is_alive() and (time.time() - start_time) < timeout:
+            time.sleep(0.1)
+        
+        if viz.is_alive():
+            print("Warning: Visualization did not finish, terminating...")
+            viz.terminate()
+            viz.join()
+        else:
+            viz.join()
+            print("Visualization joined")
+    
     # Clean up resources
     print("Cleaning up resources...")
     del tracker
     del keyframes
     del states
+    if not args.no_viz:
+        del main2viz
+        del viz2main
     del manager    
     torch.cuda.empty_cache()
     if visualize_hcgif:

@@ -759,9 +759,6 @@ if __name__=='__main__':
                     # Flatten the mask to match depths shape
                     human_mask_flat = human_mask_resized.flatten()
 
-                    # TODO(yiwen) to see whether applying the human mask make a real difference
-                    # breakpoint()
-                    
                     # Exclude human regions from valid_mask
                     valid_mask = valid_mask & (~human_mask_flat)
                 
@@ -826,18 +823,15 @@ if __name__=='__main__':
                 if args.depth_mask and hard_human_mask is not None and hard_human_mask.any():
                     # Create masked version of depth_map (set human regions to 0 to exclude from scale estimation)
                     depth_map_masked = depth_map.copy()
-                    # Use the mask that was already resized for SLAM depth processing (human_mask_resized)
-                    # This mask is already the correct size for depth_map
                     if 'human_mask_resized' in locals():
                         depth_map_masked[human_mask_resized] = 0.0
                     else:
-                        # Fallback: if mask wasn't resized (same size case), use it directly
+                        # resize the mask
                         mask_h, mask_w = hard_human_mask.shape
                         depth_h, depth_w = depth_map.shape
                         if mask_h == depth_h and mask_w == depth_w:
                             depth_map_masked[hard_human_mask > mask_thres] = 0.0
                         else:
-                            # Need to resize mask
                             mask_torch = torch.from_numpy(hard_human_mask).float().unsqueeze(0).unsqueeze(0)
                             mask_resized = F.interpolate(
                                 mask_torch,
@@ -858,7 +852,7 @@ if __name__=='__main__':
                         cv2.imwrite(f"{os.path.join(depth_img_folder, f'mdepth_frame_{i:06d}.png')}", metric_depth_uint8)
 
                 # Use est_scale_hybrid for refined scaler estimation
-                from scripts.emdb.refine_depth import est_scale_hybrid
+                from emdb.refine_depth import est_scale_hybrid
                 refined_scaler = est_scale_hybrid(
                     slam_depth_raw=depth_map_for_scale,
                     pred_depth=metric_depth_for_scale
@@ -919,8 +913,6 @@ if __name__=='__main__':
                     
                     # Flatten the mask to match depths shape
                     human_mask_flat = human_mask_resized.flatten()
-                    
-                    # Exclude human regions from valid_mask
                     valid_mask = valid_mask & (~human_mask_flat)
                 
                 valid_depths = depths[valid_mask]
@@ -969,20 +961,15 @@ if __name__=='__main__':
                         velocities.append(np.array([dx, dy, dz]))
                     
                     if len(velocities) > 0:
-                        # Compute velocity magnitudes
                         velocity_magnitudes = np.array([np.linalg.norm(v) for v in velocities])
-                        
-                        # Choose statistical measure based on clamp mode (more conservative = stricter)
-                        base_velocity = np.median(velocity_magnitudes)  # Default to median
+                        base_velocity = np.median(velocity_magnitudes)
                         
                         # Clamp threshold based on velocity
                         clamp_threshold = base_velocity * ema_clamp_multiplier
                         
-                        # Apply absolute maximum if specified (additional hard limit)
                         if ema_clamp_absolute_max is not None:
                             clamp_threshold = min(clamp_threshold, ema_clamp_absolute_max)
                         
-                        # Additional statistics for debugging
                         avg_velocity = np.mean(velocity_magnitudes)
                         max_velocity = np.max(velocity_magnitudes)
                         median_velocity = np.median(velocity_magnitudes)

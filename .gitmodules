@@ -1,3 +1,6 @@
 [submodule "thirdparty/MASt3R-SLAM"]
 	path = thirdparty/MASt3R-SLAM
 	url = https://github.com/Tsukasane/MASt3R-SLAM.git
+[submodule "thirdparty/Tracking-Anything-with-DEVA"]
+	path = thirdparty/Tracking-Anything-with-DEVA
+	url = https://github.com/hkchengrex/Tracking-Anything-with-DEVA.git
