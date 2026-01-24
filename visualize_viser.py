@@ -59,15 +59,15 @@ def _load_camera_transforms(camera_txt_path: str) -> tuple[Optional[torch.Tensor
 def load_human_world_vertices(
     human_npz_path: str,
     camera_txt_path: str,
-) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+) -> tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
     """Load predicted humans in world coordinates using associated camera poses."""
     if not human_npz_path or not os.path.exists(human_npz_path):
         print(f"Human prediction file not found or invalid: {human_npz_path}")
-        return None, None
+        return None, None, None
 
     cam_t, cam_R = _load_camera_transforms(camera_txt_path)
     if cam_t is None or cam_R is None:
-        return None, None
+        return None, None, None
 
     faces = SMPL_FACES
     smpl_model = SMPL_MODEL
@@ -77,19 +77,47 @@ def load_human_world_vertices(
             pred_rotmat = torch.from_numpy(data["pred_rotmat"]).float()
             pred_shape = torch.from_numpy(data["pred_shape"]).float()
             pred_trans = torch.from_numpy(data["pred_trans"]).float()
+            frame_ids_np = data["frame_ids"] if "frame_ids" in data else None
     except Exception as exc:
         print(f"Failed to load human predictions from {human_npz_path}: {exc}")
-        return None, None
+        return None, None, None
 
     if pred_trans.ndim == 3:
         pred_trans = pred_trans.squeeze(1)
     if pred_trans.ndim == 1:
         pred_trans = pred_trans.unsqueeze(0)
 
+    num_frames = pred_rotmat.shape[0]
+    if frame_ids_np is None:
+        frame_ids_np = np.arange(num_frames, dtype=np.int64)
+    frame_ids_np = np.asarray(frame_ids_np).astype(np.int64, copy=False).reshape(-1)
+    if frame_ids_np.shape[0] != num_frames:
+        print(
+            f"Frame id count mismatch for {human_npz_path}: "
+            f"{frame_ids_np.shape[0]} frame_ids vs {num_frames} frames."
+        )
+        return None, None, None
+
+    frame_ids = torch.from_numpy(frame_ids_np).long()
+    valid = (frame_ids > 0) & (frame_ids <= cam_t.shape[0])
+    if not bool(valid.all()):
+        invalid_count = int((~valid).sum().item())
+        print(
+            f"Frame id range error for {human_npz_path}: "
+            f"{invalid_count} frame_ids outside camera range."
+        )
+        return None, None, None
+
+    if frame_ids.numel() > 1:
+        order = torch.argsort(frame_ids)
+        frame_ids = frame_ids[order]
+        pred_rotmat = pred_rotmat[order]
+        pred_shape = pred_shape[order]
+        pred_trans = pred_trans[order]
+        frame_ids_np = frame_ids.cpu().numpy()
+
     mean_shape = pred_shape.mean(dim=0, keepdim=True)
     pred_shape = mean_shape.expand(pred_rotmat.shape[0], -1).contiguous()
-
-    num_frames = pred_rotmat.shape[0]
 
     with torch.no_grad():
         target_joints = 24
@@ -109,9 +137,29 @@ def load_human_world_vertices(
         )
         vertices_local = smpl_out.vertices
 
-    vertices_world = torch.einsum("bij,bnj->bni", cam_R, vertices_local) + cam_t.unsqueeze(1)
+    cam_R_sel = cam_R[frame_ids - 1]
+    cam_t_sel = cam_t[frame_ids - 1]
+    vertices_world = torch.einsum("bij,bnj->bni", cam_R_sel, vertices_local) + cam_t_sel.unsqueeze(1)
     vertices_world_np = vertices_world.cpu().numpy().astype(np.float32, copy=False)
-    return vertices_world_np, faces
+    return vertices_world_np, faces, frame_ids_np
+
+
+def _normalize_human_npz_paths(human_npz_path: Optional[object]) -> list[str]:
+    if human_npz_path is None:
+        return []
+    if isinstance(human_npz_path, (list, tuple)):
+        items = []
+        for entry in human_npz_path:
+            if entry is None:
+                continue
+            if isinstance(entry, str):
+                items.extend([part.strip() for part in entry.split(",") if part.strip()])
+            else:
+                items.append(str(entry))
+        return items
+    if isinstance(human_npz_path, str):
+        return [part.strip() for part in human_npz_path.split(",") if part.strip()]
+    return [str(human_npz_path)]
 
 
 def _load_camera_for_vis(camera_path: str) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
@@ -129,7 +177,7 @@ def _load_camera_for_vis(camera_path: str) -> tuple[Optional[np.ndarray], Option
 
 def render_viser_scene(
     *,
-    human_npz_path: Optional[str],
+    human_npz_path: Optional[object],
     camera_path: str,
     stride: int = 5,
     human_stride: int = 20,
@@ -143,29 +191,38 @@ def render_viser_scene(
         return
 
     stride = max(int(stride), 1)
+    human_stride = max(int(human_stride), 1)
     positions = cam_t[::stride]
     rotations = cam_R[::stride]
     if positions.size == 0 or rotations.size == 0:
         print("Camera trajectory is empty after applying stride.")
         return
 
-    human_vertices_seq: Optional[np.ndarray] = None
-    human_faces: Optional[np.ndarray] = None
-    if human_npz_path:
-        verts_world, faces = load_human_world_vertices(human_npz_path, camera_path)
-        if verts_world is not None and faces is not None:
-            human_stride = max(int(human_stride), 1)
-            human_vertices_seq = verts_world[::human_stride]
-            human_faces = faces.astype(np.int32, copy=False)
+    human_tracks: list[dict[str, Any]] = []
+    human_paths = _normalize_human_npz_paths(human_npz_path)
+    for human_path in human_paths:
+        verts_world, faces, frame_ids = load_human_world_vertices(human_path, camera_path)
+        if verts_world is None or faces is None or frame_ids is None:
+            continue
+        verts_world = verts_world[::human_stride]
+        frame_ids = np.asarray(frame_ids)[::human_stride]
+        if verts_world.size == 0 or frame_ids.size == 0:
+            continue
+        human_tracks.append(
+            {
+                "vertices": verts_world,
+                "faces": faces.astype(np.int32, copy=False),
+                "frame_ids": frame_ids.astype(np.int64, copy=False),
+            }
+        )
 
     cam_steps = positions.shape[0]
-    human_steps = human_vertices_seq.shape[0] if human_vertices_seq is not None else 0
-    timeline_steps = max(
-        (cam_steps - 1) * stride + 1 if cam_steps else 0,
-        (human_steps - 1) * human_stride + 1 if human_steps else 0,
-        cam_steps,
-        human_steps,
-    )
+    full_cam_steps = cam_t.shape[0]
+    max_human_frame = -1
+    for track in human_tracks:
+        if track["frame_ids"].size:
+            max_human_frame = max(max_human_frame, int(np.max(track["frame_ids"])))
+    timeline_steps = max(full_cam_steps, max_human_frame + 1 if max_human_frame >= 0 else 0)
     world_origin = positions[0]
 
     def _make_line_segments(points_xyz: np.ndarray) -> np.ndarray:
@@ -244,8 +301,8 @@ def render_viser_scene(
         gui_show_frustum = server.gui.add_checkbox("Show Frustum", True)
         gui_show_humans = server.gui.add_checkbox(
             "Show Humans",
-            bool(human_vertices_seq is not None and human_faces is not None),
-            disabled=human_vertices_seq is None or human_faces is None,
+            bool(human_tracks),
+            disabled=not human_tracks,
         )
         gui_timestep = server.gui.add_slider(
             "Timestep",
@@ -273,15 +330,30 @@ def render_viser_scene(
         line_width=1.2,
     )
 
-    human_mesh_handle: Optional[Any] = None
+    human_mesh_handles: list[Any] = []
     static_human_mesh_handles: list[Any] = []
-    if human_vertices_seq is not None and human_faces is not None:
+    if human_tracks:
         if static:
-            for idx, verts in enumerate(human_vertices_seq):
+            for track_idx, track in enumerate(human_tracks):
+                for frame_idx, verts in enumerate(track["vertices"]):
+                    handle = server.scene.add_mesh_simple(
+                        name=f"/humans/{track_idx}/{frame_idx}",
+                        vertices=verts,
+                        faces=track["faces"],
+                        flat_shading=False,
+                        wireframe=False,
+                        opacity=None,
+                        color=(249.0 / 255.0, 199.0 / 255.0, 155.0 / 255.0),
+                        side="double",
+                    )
+                    handle.visible = gui_show_humans.value
+                    static_human_mesh_handles.append(handle)
+        else:
+            for track_idx, track in enumerate(human_tracks):
                 handle = server.scene.add_mesh_simple(
-                    name=f"/humans/{idx}",
-                    vertices=verts,
-                    faces=human_faces,
+                    name=f"/humans/{track_idx}",
+                    vertices=track["vertices"][0],
+                    faces=track["faces"],
                     flat_shading=False,
                     wireframe=False,
                     opacity=None,
@@ -289,22 +361,20 @@ def render_viser_scene(
                     side="double",
                 )
                 handle.visible = gui_show_humans.value
-                static_human_mesh_handles.append(handle)
-        else:
-            human_mesh_handle = server.scene.add_mesh_simple(
-                name="/humans",
-                vertices=human_vertices_seq[0],
-                faces=human_faces,
-                flat_shading=False,
-                wireframe=False,
-                opacity=None,
-                color=(249.0 / 255.0, 199.0 / 255.0, 155.0 / 255.0),
-                side="double",
-            )
-            human_mesh_handle.visible = gui_show_humans.value
+                human_mesh_handles.append(handle)
 
     frustum_segments_full, frustum_time_ids_full = _make_frustum_segments(rotations, positions)
     trajectory_segments_full = _make_line_segments(positions)
+
+    def _select_human_frame(frame_ids: np.ndarray, base_step_idx: int) -> Optional[int]:
+        if frame_ids.size == 0:
+            return None
+        if base_step_idx < frame_ids[0] or base_step_idx > frame_ids[-1]:
+            return None
+        idx = int(np.searchsorted(frame_ids, base_step_idx, side="right") - 1)
+        if idx < 0 or idx >= frame_ids.size:
+            return None
+        return idx
 
     def _update_step(base_step_idx: int) -> None:
         if static:
@@ -334,10 +404,19 @@ def render_viser_scene(
         else:
             frustum_handle.visible = gui_show_frustum.value and frustum_segments.size > 0
 
-        if human_mesh_handle is not None and human_vertices_seq is not None and human_vertices_seq.size:
-            human_idx = min(base_step_idx // human_stride, human_vertices_seq.shape[0] - 1)
-            human_mesh_handle.vertices = human_vertices_seq[human_idx]
-            human_mesh_handle.visible = gui_show_humans.value
+        if human_mesh_handles and gui_show_humans.value:
+            for track, handle in zip(human_tracks, human_mesh_handles):
+                frame_ids = track["frame_ids"]
+                verts_seq = track["vertices"]
+                human_idx = _select_human_frame(frame_ids, base_step_idx)
+                if human_idx is None:
+                    handle.visible = False
+                    continue
+                handle.vertices = verts_seq[human_idx]
+                handle.visible = True
+        elif human_mesh_handles:
+            for handle in human_mesh_handles:
+                handle.visible = False
 
     if static:
         traj_handle.points = trajectory_segments_full
@@ -366,16 +445,14 @@ def render_viser_scene(
         _update_step(gui_timestep.value)
         server.flush()
 
-    if static_human_mesh_handles:
+    if static_human_mesh_handles or human_mesh_handles:
         @gui_show_humans.on_update
         def _(_) -> None:
-            for handle in static_human_mesh_handles:
-                handle.visible = gui_show_humans.value
-            server.flush()
-    elif human_mesh_handle is not None:
-        @gui_show_humans.on_update
-        def _(_) -> None:
-            human_mesh_handle.visible = gui_show_humans.value
+            if static_human_mesh_handles:
+                for handle in static_human_mesh_handles:
+                    handle.visible = gui_show_humans.value
+            else:
+                _update_step(gui_timestep.value)
             server.flush()
 
     @gui_timestep.on_update
@@ -418,7 +495,7 @@ def render_viser_scene(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Minimal Viser demo for human trajectories.")
-    parser.add_argument("--human_npz_path", type=str, required=False, help="Path to human prediction npz.")
+    parser.add_argument("--human_npz_path", type=str, nargs="*", required=False, help="Path(s) to human prediction npz. Repeat or provide multiple values.")
     parser.add_argument("--camera_path", type=str, required=True, help="Camera trajectory txt for the human prediction.")
     parser.add_argument("--stride", type=int, default=5, help="Stride for sampling camera poses.")
     parser.add_argument("--human_stride", type=int, default=1, help="Stride for subsampling human meshes.")
