@@ -17,7 +17,7 @@ def plot_spectrogram(motion_ts, sr=30, save_name="mspec.png", align_interpolate=
     device = motion_ts.device
     y = motion_ts.reshape(-1,)
     # y = motion_ts.norm(dim=2).mean(dim=1).unsqueeze(0)
-    print(f'debug -- freq_motion {y.shape}')
+    # print(f'debug -- freq_motion {y.shape}')
     
     seqlen = motion_ts.shape[0]
 
@@ -47,7 +47,8 @@ def plot_spectrogram(motion_ts, sr=30, save_name="mspec.png", align_interpolate=
     else:
         amplitude = amplitude_raw[0]
 
-    plot_amplitude(amplitude, save_name)
+    if save_name is not None:
+        plot_amplitude(amplitude, save_name)
 
     return amplitude
 

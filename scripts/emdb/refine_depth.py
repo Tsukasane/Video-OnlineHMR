@@ -37,15 +37,19 @@ def est_scale_hybrid(slam_depth_raw: np.ndarray,
     )
 
     # Stage 1: Iterative steps
-    s = pred_depth / slam_depth
+    # Avoid division by zero: replace zeros in slam_depth with a small epsilon
+    eps = np.finfo(slam_depth.dtype).eps
+    slam_depth_safe = np.where(slam_depth > 0, slam_depth, eps)
+    s = pred_depth / slam_depth_safe
 
-    robust = (msk<0.5) * (0<pred_depth) * (pred_depth<10) # if there is mask (for human) ==1, ignore those regions
+    robust = (msk<0.5) * (eps<pred_depth) * (pred_depth<10) # if there is mask (for human) ==1, ignore those regions
     s_est = s[robust]
     scale_median = np.median(s_est) # use the median value as initial scale
     
     for _ in range(10): # seems no big difference after several iterations ~0.001
         slam_depth_0 = slam_depth * scale_median
-        robust = (msk<0.5) * (0<slam_depth_0) * (slam_depth_0<far_thresh) * (0<pred_depth) * (pred_depth<far_thresh)
+        # Filter out invalid depths: check both original and scaled depths > eps to be consistent with epsilon replacement
+        robust = (msk<0.5) * (eps<slam_depth) * (eps<slam_depth_0) * (slam_depth_0<far_thresh) * (eps<pred_depth) * (pred_depth<far_thresh)
         s_est = s[robust]
         scale_median = np.median(s_est)
 
@@ -53,7 +57,8 @@ def est_scale_hybrid(slam_depth_raw: np.ndarray,
     scale = scale_median
 
     # Stage 2: Robust optimization
-    robust = (msk<0.5) * (0<slam_depth_0) * (slam_depth_0<far_thresh) * (0<pred_depth) * (pred_depth<far_thresh)
+    # Filter out invalid depths: check both original and scaled depths > eps to be consistent with epsilon replacement
+    robust = (msk<0.5) * (eps<slam_depth) * (eps<slam_depth_0) * (slam_depth_0<far_thresh) * (eps<pred_depth) * (pred_depth<far_thresh)
     pm = torch.from_numpy(pred_depth[robust])
     sm = torch.from_numpy(slam_depth[robust])
 
@@ -66,7 +71,6 @@ def est_scale_hybrid(slam_depth_raw: np.ndarray,
     result = minimize(f, x0,  method='bfgs')
     scale = result.x.detach().cpu().item()
     # print(f"Depth scale estimation: robust opt {scale:.4f}")
-    end_time = time.time()
     # print(f"Depth scale estimation time: {end_time - start_time:.2f} s")
     
     return scale

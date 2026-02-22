@@ -3,6 +3,7 @@ import logging
 from tqdm import tqdm
 from lib.core.base_trainer import BaseTrainer
 from lib.utils.pose_utils import Evaluator
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,12 @@ class Trainer(BaseTrainer):
         jitter = evaluator.jitter[:evaluator.counter].mean()
         jitter_gt = evaluator.jitter_gt[:evaluator.counter].mean()
 
+        if len(evaluator.freq_mse_pct) > 0:
+            freq_mse_pct = np.nanmean(evaluator.freq_mse_pct)
+            freq_corr_pct = np.nanmean(evaluator.freq_corr_pct)
+        else:
+            freq_mse_pct = np.nan
+            freq_corr_pct = np.nan
 
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation re: {re}")
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation mpjpe: {mpjpe}")
@@ -186,6 +193,8 @@ class Trainer(BaseTrainer):
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation pve: {pve}")
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation jitter: {jitter}")
         logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation jitter (gt): {jitter_gt}")
+        logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation freq_mse_pct: {freq_mse_pct}")
+        logger.info(f"Epoch {self.epoch}, Step {self.global_step}, validation freq_corr_pct: {freq_corr_pct}")
 
         self.writer.add_scalar(f"Validation/RE", re, self.global_step)
         self.writer.add_scalar(f"Validation/MPJPE", mpjpe, self.global_step)
@@ -193,6 +202,8 @@ class Trainer(BaseTrainer):
         self.writer.add_scalar(f"Validation/PVE", pve, self.global_step)
         self.writer.add_scalar(f"Validation/JITTER", jitter, self.global_step)
         self.writer.add_scalar(f"Validation/JITTER_GT", jitter_gt, self.global_step)
+        self.writer.add_scalar(f"Validation/FREQ_MSE_PCT", freq_mse_pct, self.global_step)
+        self.writer.add_scalar(f"Validation/FREQ_CORR_PCT", freq_corr_pct, self.global_step)
         self.writer.flush()
 
         self.model.train()

@@ -21,7 +21,7 @@ tracking:
   rel_error: 1e-3
   delta_norm: 1e-3
   huber: 1.345
-  match_frac_thresh: 0.393 # 0.333
+  match_frac_thresh: 0.373 # 0.333
   sigma_ray: 0.003
   sigma_dist: 1e+1
   sigma_pixel: 1.0
@@ -31,7 +31,7 @@ tracking:
   depth_eps: 1e-6 # Only in calib case
   filtering_mode: weighted_pointmap # recent, first, best_score, weighted_pointmap, weighted_spherical, indep_conf
   filtering_score: median # median, mean (only used for filtering_mode=best_score)
-  max_keyframes: 1024
+  max_keyframes: 900
 
 local_opt:
   pin: 1
@@ -55,5 +55,5 @@ retrieval:
   min_thresh: 5e-3  # 0.005
 
 reloc:
-  min_match_frac: 0.3
-  strict: True
+  min_match_frac: 0.05
+  strict: False

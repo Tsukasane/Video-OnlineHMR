@@ -31,7 +31,7 @@ args = parser.parse_args()
 # EMDB dataset and splits
 roots = []
 for p in range(10):
-    folder = f'./../datasets/emdb/P{p}'
+    folder = f'./../../datasets/emdb/P{p}'
     root = sorted(glob(f'{folder}/*'))
     roots.extend(root)
 
@@ -48,6 +48,7 @@ for f in failed_seqs:
     emdb.pop(f-failed_cnt)
     failed_cnt += 1
 
+emdb = emdb[2:3]
 
 # SMPL
 smpl = SMPL()
@@ -120,7 +121,7 @@ for root in tqdm(emdb):
 
     pred_camt_ls = []
     pred_camr_ls = []
-    depth_frame_register = 2
+    depth_frame_register = 4
     if depth_frame_register:
         naive_scaler = 0.0
         for fm in range(depth_frame_register):
@@ -130,16 +131,15 @@ for root in tqdm(emdb):
         naive_scaler = 1.0
     scaler_cnt = 0
 
-    print(f"debug -- naive_scaler: {naive_scaler}")
+    scale_ls = []
     for l_id, line in enumerate(lines):
-        # print(f"debug -- l_id {l_id}")
         vals = list(map(float, line.strip().split()))
-        scaler_cnt += vals[0]
+        scale_ls.append(vals[0])
         tx, ty, tz = vals[1:4]
         qx, qy, qz, qw = vals[4:]
         wxyz = [qw, qx, qy, qz] # to wxyz
     
-        current_camt = torch.tensor([naive_scaler*tx, naive_scaler*ty, naive_scaler*tz]).unsqueeze(0)
+        current_camt = torch.tensor([tx, ty, tz]).unsqueeze(0)
         current_camq = torch.tensor([qw, qx, qy, qz]).unsqueeze(0)
         current_camr = quaternion_to_matrix(current_camq)
 
@@ -148,10 +148,11 @@ for root in tqdm(emdb):
     
     scaler_cnt /= len(lines)
 
-    print(f"debug -- scaler_cnt: {scaler_cnt}")
     # pred_camt = scaler_cnt * torch.stack(pred_camt_ls).squeeze(1) # T, 3
     pred_camt = torch.stack(pred_camt_ls).squeeze(1) # T, 3
     pred_camr = torch.stack(pred_camr_ls).squeeze(1) # T, 3, 3
+
+    pred_camt = pred_camt * naive_scaler
 
     pred_vert_w = torch.einsum('bij,bnj->bni', pred_camr, pred_vert) + pred_camt[:,None]
     pred_j3d_w = torch.einsum('bij,bnj->bni', pred_camr, pred_j3d) + pred_camt[:,None]

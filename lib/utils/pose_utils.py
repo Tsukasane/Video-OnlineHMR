@@ -32,10 +32,17 @@ def cal_spectrogram_similarity(gt_amp, pred_amp, alpha=0.5, eps=1e-8):
     numerator = torch.sum((gt_amp - gt_mean) * (pred_amp - pred_mean))
     denominator = torch.sqrt(torch.sum((gt_amp - gt_mean) ** 2) * torch.sum((pred_amp - pred_mean) ** 2))
     corr = numerator / (denominator + eps)
+    # Clamp correlation to [-1, 1] to handle numerical precision issues
+    corr = torch.clamp(corr, -1.0, 1.0)
     corr_loss = (1.0 - corr) / 2.0   # 0..1, 0 best
     corr_pct = corr_loss * 100.0
 
     print(f"mse_pct: {mse_pct}; corr_pct: {corr_pct}")
+    
+    return {
+        'mse_pct': mse_pct.item() if isinstance(mse_pct, torch.Tensor) else mse_pct,
+        'corr_pct': corr_pct.item() if isinstance(corr_pct, torch.Tensor) else corr_pct
+    }
 
 
 def compute_error_accel(joints_gt, joints_pred, vis=None):
@@ -207,6 +214,8 @@ class Evaluator:
         self.acc = np.zeros((dataset_length,))
         self.jitter = np.zeros((dataset_length,))
         self.jitter_gt = np.zeros((dataset_length,))
+        self.freq_mse_pct = []  # Frequency domain MSE percentage (per sequence)
+        self.freq_corr_pct = []  # Frequency domain correlation loss percentage (per sequence)
         self.counter = 0
 
         self.J24_TO_J17 = constants.J24_TO_J17
@@ -282,6 +291,10 @@ class Evaluator:
         self.mpjpe[self.counter:self.counter+batch_size] = mpjpe # bs*seqlen
         self.re[self.counter:self.counter+batch_size] = re
 
+        # Save original keypoints before any modifications for frequency domain metrics
+        gt_keypoints_3d_orig = gt_keypoints_3d.clone()
+        pred_keypoints_3d_orig = pred_keypoints_3d.clone()
+        
         if gt_verts is not None and pred_verts is not None:
             gt_verts = select_valid(gt_verts, batch_t)
         
@@ -310,6 +323,31 @@ class Evaluator:
                 jitter_gt += eval_jitter(gt[i]).mean() / len(gt)
             self.jitter[self.counter:self.counter+batch_size] = jitter
             self.jitter_gt[self.counter:self.counter+batch_size] = jitter_gt
+            
+            # Frequency domain metrics (for all sequences in the batch)
+            # Use original coordinates without pelvis alignment (consistent with GVHMR)
+            # Note: GVHMR computes frequency metrics on raw camera coordinates without pelvis alignment
+            gt_keypoints_3d_freq = select_valid(gt_keypoints_3d_orig, batch_t)
+            pred_keypoints_3d_freq = pred_keypoints_3d_orig
+            gt_freq = gt_keypoints_3d_freq.reshape(batch_t, -1, num_j, 3).cpu()
+            pred_freq = pred_keypoints_3d_freq.reshape(batch_t, -1, num_j, 3).cpu()
+            
+            min_frames_for_freq = 10
+            for i in range(len(gt_freq)):
+                if gt_freq[i].shape[0] >= min_frames_for_freq:
+                    # Compute spectrograms: (seqlen, J, 3) -> (seqlen, freq_bins)
+                    # Use joint positions as motion signal, sr=30*24 following original convention
+                    gt_amplitude = plot_spectrogram(gt_freq[i], sr=30*24, save_name=None, align_interpolate=True)
+                    pred_amplitude = plot_spectrogram(pred_freq[i], sr=30*24, save_name=None, align_interpolate=True)
+                    
+                    # Compute frequency domain similarity
+                    freq_metrics = cal_spectrogram_similarity(gt_amplitude, pred_amplitude)
+                    self.freq_mse_pct.append(freq_metrics['mse_pct'])
+                    self.freq_corr_pct.append(freq_metrics['corr_pct'])
+                else:
+                    # Not enough frames, set to NaN
+                    self.freq_mse_pct.append(np.nan)
+                    self.freq_corr_pct.append(np.nan)
             
         self.counter += batch_size
 
@@ -370,6 +408,16 @@ class Evaluator:
         print(f'mpjpe: {self.mpjpe[:self.counter].mean()} mm')
         print(f'pve: {self.pve[:self.counter].mean()} mm')
         print(f'accel: {self.acc[:self.counter].mean()} mm')
+        
+        # Frequency domain metrics
+        if len(self.freq_mse_pct) > 0:
+            freq_mse_pct_array = np.array(self.freq_mse_pct)
+            freq_corr_pct_array = np.array(self.freq_corr_pct)
+            freq_mse_mean = np.nanmean(freq_mse_pct_array)
+            freq_corr_mean = np.nanmean(freq_corr_pct_array)
+            print(f'freq_mse_pct: {freq_mse_mean:.3f}')
+            print(f'freq_corr_pct: {freq_corr_mean:.3f}')
+        
         print('***')
 
 

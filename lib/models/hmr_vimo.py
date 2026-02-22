@@ -17,11 +17,11 @@ from lib.models.casual_kvcache import SMPLDecoderModel
 
 autocast = torch.amp.autocast
 
-def select_valid(batch_tensor, batch_size):
+def select_valid(batch_tensor, batch_size, max_memt=2):
     """
     Get only the last frame result in each window
     """
-    batch_tensor = batch_tensor.reshape(batch_size, -1, *batch_tensor.shape[1:])[:,2:,...]
+    batch_tensor = batch_tensor.reshape(batch_size, -1, *batch_tensor.shape[1:])[:,max_memt:,...]
     batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])
 
     return batch_tensor

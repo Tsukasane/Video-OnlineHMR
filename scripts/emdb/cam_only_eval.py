@@ -14,7 +14,7 @@ from lib.vis.traj import *
 from lib.camera.slam_utils import eval_slam
 
 """
-python ./scripts/emdb/cam_only_eval.py --camera_root ./soft_mask_mast3r_slam/camera
+python ./scripts/emdb/cam_only_eval.py --camera_root ./lognew1
 """
 
 parser = argparse.ArgumentParser()
@@ -29,7 +29,7 @@ slam_method = "mast3r_slam"
 # EMDB dataset and splits
 roots = []
 for p in range(10):
-    folder = f'./../datasets/emdb/P{p}'
+    folder = f'./../../datasets/emdb/P{p}' # NOTE(yiwen) change to your EMDB dataset path
     root = sorted(glob(f'{folder}/*'))
     roots.extend(root)
 
@@ -44,7 +44,10 @@ for root in roots:
 # Evaluation: Camera motion
 results = {}
 all_ate = 0
+all_ate_noscale = 0
 ate_cnt = 0
+
+flag = False
 
 for root in emdb:
     # Annotation
@@ -71,7 +74,8 @@ for root in emdb:
     elif slam_method=="mast3r_slam":
         root_dir = args.camera_root
         scene_name = "_".join(root.split('/')[-2:]) # P0_09
-        
+
+        # scene_name = "_".join(scene_name.split('_')[:2])
         txt_file = os.path.join(root_dir, f"{scene_name}_images_incremental_all.txt")
         
         with open(txt_file, "r") as f:
@@ -85,7 +89,9 @@ for root in emdb:
         for l_id, line in enumerate(lines):
             # print(f"debug -- l_id {l_id}")
             vals = list(map(float, line.strip().split()))
-            timestep = vals[0]
+            if l_id == 0:
+                scaler = vals[0]
+            # scale_ls.append(vals[0])
             tx, ty, tz = vals[1:4]
             qx, qy, qz, qw = vals[4:]
             wxyz = [qw, qx, qy, qz]
@@ -94,11 +100,15 @@ for root in emdb:
             pred_camq_ls.append(wxyz)
 
         pred_camt = torch.tensor(pred_camt_ls)
+        pred_camt_scaled = torch.tensor(pred_camt_ls) * scaler
+
         pred_camq = torch.tensor(pred_camq_ls)
 
     pred_traj = torch.concat([pred_camt, pred_camq], dim=-1).numpy()
+    pred_traj_scaled = torch.concat([pred_camt_scaled, pred_camq], dim=-1).numpy()
     try:
         stats_slam, _, _ = eval_slam(pred_traj.copy(), cam_t, cam_q, correct_scale=True)
+        stats_slam_noscale, _, _ = eval_slam(pred_traj_scaled.copy(), cam_t, cam_q, correct_scale=False)
     except:
         breakpoint()
         print(f"The sequence is not comparible with gt")
@@ -107,15 +117,17 @@ for root in emdb:
     # stats_metric, traj_ref, traj_est = eval_slam(pred_traj.copy(), cam_t, cam_q, correct_scale=False)
   
     current_ate = np.mean(stats_slam['mean'])
+    current_ate_noscale = np.mean(stats_slam_noscale['mean'])
     print(f"debug -- current ate:{current_ate}")
+    print(f"debug -- current ate noscale:{current_ate_noscale}")
 
     all_ate += current_ate
+    all_ate_noscale += current_ate_noscale
     ate_cnt += 1
 
 
 print(f"average ate: {all_ate / ate_cnt}")
-
-
+print(f"average ate noscale: {all_ate_noscale / ate_cnt}")
 
 # ate = np.mean([re['stats_slam']['mean'] for re in results.values()])
 # ate_s = np.mean([re['stats_metric']['mean'] for re in results.values()])

@@ -74,7 +74,7 @@ python ./scripts/run_custom_mt.py --video double_test2.mp4 --no-viz --calib fals
 single_color1 = [[1.0, 0.2, 0.0]]
 single_color2 = [[0.0, 0.8, 1.0]]
 
-iou_thresh = 0.5
+iou_thresh = 0.1
 conf_thresh = 0.5
 
 def quaternion_translation_to_Sim3(t, q, device):
@@ -700,6 +700,7 @@ if __name__=='__main__':
             continue
 
         # Mast3r-SLAM tracking
+        add_new_kf = False  # Initialize to False, will be set in TRACKING mode
         if mode == Mode.TRACKING:
             add_new_kf, match_info, try_reloc = tracker.track(frame)
             if try_reloc:
@@ -724,10 +725,10 @@ if __name__=='__main__':
                 metric_depth = metric_depth_model.infer(depth_input_img)["depth"]
 
                 valid_depths = depths[valid_mask]
-                if len(valid_depths) > 0 and valid_depths.min() > 0:
-                    print(f"debug -- before human mask scaler: {metric_depth.min() / valid_depths.min()}")
-                else:
-                    print(f"debug -- before human mask scaler: valid_depths is empty or contains zero")
+                # if len(valid_depths) > 0 and valid_depths.min() > 0:
+                #     print(f"debug -- before human mask scaler: {metric_depth.min() / valid_depths.min()}")
+                # else:
+                #     print(f"debug -- before human mask scaler: valid_depths is empty or contains zero")
                 
                 # Also remove human region from SLAM depths (only if --depth-mask is enabled)
                 if args.depth_mask and hard_human_mask is not None and hard_human_mask.any():
@@ -1066,7 +1067,7 @@ if __name__=='__main__':
                         break
                 time.sleep(0.01)
 
-        ###### Camera Coordinate Human Mesh Recovery --> Only support single person for now ######
+        ###### Camera Coordinate Human Mesh Recovery ######
         # --- Detect Bounding Boxes ---
         
         with torch.no_grad():
@@ -1080,25 +1081,48 @@ if __name__=='__main__':
                 boxes = np.hstack([boxes, confs[:, None]])
                 boxes = arrange_boxes(boxes, mode='size', min_size=100)
 
-        # Initialize DEVA tracker once (outside loop, if not already initialized)
-        if boxes.shape[0] > 1:  # when multiple person detected
-            # Check if we need to initialize DEVA tracker (use global variables)
+        if boxes.shape[0] > 0:
+            # Check if we need to initialize DEVA tracker
             if '_deva_initialized' not in globals():
                 print(f"detect multiple persons, init tracking")
                 vid_length = len(imgfiles)
                 globals()['_deva'], globals()['_result_saver'] = get_deva_tracker(
-                    vid_length, "./output_deva", online_mode=True
+                    vid_length, "./output_deva", online_mode=False # NOTE(yiwen) need to init this even only has one person
                 )
                 globals()['_deva_initialized'] = True
                 globals()['_deva_track_with_mask'] = track_with_mask
-            
+
             # Filter high confidence detections for tracking
             high_conf_mask = boxes[:, -1] > 0.80
+            print(f"debug -- boxes.shape {boxes.shape}")
+            
             if high_conf_mask.sum() > 0:
                 track_valid = high_conf_mask
-                masks_track = masks[track_valid] # 2, 652, 690
-                scores_track = scores[track_valid] # (num_person, 1)
+                # masks_track = masks[track_valid] # 2, 652, 690
+                # scores_track = scores[track_valid] # (num_person, 1)
                 boxes_track = boxes[track_valid] # (num_person, 5)
+
+                # Re-generate masks and scores for the tracked boxes using SAM
+                # This ensures masks/scores match the current detection boxes
+                if boxes_track.shape[0] > 0:
+                    with autocast('cuda'):
+                        # Only set image if not already set or if image changed
+                        # (SAM predictor caches the image, so we can reuse if same image)
+                        sam_predictor.set_image(img_cv2, image_format='BGR')
+                        bb_track = torch.tensor(boxes_track[:, :4]).to(device)
+                        bb_track = sam_predictor.transform.apply_boxes_torch(bb_track, img_cv2.shape[:2])
+                        masks_track, scores_track, _ = sam_predictor.predict_torch(
+                            point_coords=None,
+                            point_labels=None,
+                            boxes=bb_track,
+                            multimask_output=False
+                        )
+                    masks_track = masks_track.detach().cpu().squeeze(1)  # (N, H, W)
+                    scores_track = scores_track.detach().cpu().squeeze(1)  # (N,)
+                else:
+                    masks_track = torch.empty((0,), dtype=torch.float32)
+                    scores_track = torch.empty((0,), dtype=torch.float32)
+
 
                 img_rgb = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
                 imgpath = imgfiles[i] if imgfiles else None
@@ -1130,22 +1154,29 @@ if __name__=='__main__':
                         msk = subj['rle']
                         msk = torch.from_numpy(masktool.decode(msk))[None]
                         
+                        # Always compute seg_box from mask
+                        seg_box = torchvision.ops.masks_to_boxes(msk)
+                        
                         if len(det_boxes)>0:
-                            seg_box = torchvision.ops.masks_to_boxes(msk)
                             iou = box_iou(det_boxes, seg_box)
                             max_iou, max_id = iou.max(), iou.argmax()
-                            max_conf = det_boxes[max_id, -1]
+                            # Get confidence from boxes_track (which has [x1, y1, x2, y2, conf])
+                            # max_id corresponds to det_boxes index, which matches boxes_track index
+                            max_conf = boxes_track[max_id, -1] if max_id < len(boxes_track) else 0.0
                         else:
                             max_iou = max_conf = 0
-                        if max_iou>iou_thresh and max_conf>conf_thresh:
+                            max_id = -1
+                        
+                        if max_iou>iou_thresh and max_conf>conf_thresh and max_id >= 0:
                             det = True
-                            det_box = det_boxes[[max_id]]
+                            # Get full box with confidence from boxes_track [x1, y1, x2, y2, conf]
+                            det_box = boxes_track[[max_id]] if max_id < len(boxes_track) else np.zeros([1, 5])
                         else:
                             det = False
                             det_box = np.zeros([1, 5])
 
                         # add fields
-                        subj['frame'] = frame 
+                        subj['frame'] = i  # Use frame index instead of frame object
                         subj['det'] = det
                         subj['det_box'] = det_box
                         subj['seg_box'] = seg_box.numpy()
@@ -1162,20 +1193,28 @@ if __name__=='__main__':
                     for k, v in tracks.items():
                         img_ck_dict[k] = np.array([imgfiles[i]])
 
-                        det_box_w_conf = np.hstack([tracks[k][-1]['det_box'], [[1]]])
+                        # Get det_box from tracks (already has [x1, y1, x2, y2, conf] format)
+                        det_box = tracks[k][-1]['det_box']
+                        # Ensure it's [1, 5] format (x1, y1, x2, y2, conf)
+                        if det_box.shape[1] == 4:
+                            # If missing confidence, use 1.0 as default
+                            det_box_w_conf = np.hstack([det_box, np.array([[1.0]])])
+                        else:
+                            det_box_w_conf = det_box
                         box_ck_dict[k] = det_box_w_conf
                 else:
                     # Fallback: use first high-conf box if no matches
-                    img_ck_dict['-1'] = np.array([imgfiles[i]])
+                    img_ck_dict['-1'] = np.array([imgfiles[i]]) # NOTE(yiwen) cannot handle the first frame even using online mode tracking
                     box_ck_dict['-1'] = boxes_track[0:1] if len(boxes_track) > 0 else boxes[0:1]
             else:
                 # No high confidence detections, use first box
-                img_ck_dict['-1'] = np.array([imgfiles[i]])
-                box_ck_dict['-1']  = boxes[0:1]
+                new_k = list(img_ck_dict.keys())[0]
+                print(f"debug -- key -1")
+                img_ck_dict[new_k] = np.array([imgfiles[i]])
+                box_ck_dict[new_k]  = boxes[0:1]
         else:
-            # for single person
-            img_ck_dict['-1'] = np.array([imgfiles[i]])  # (1,)
-            box_ck_dict['-1'] = np.array([boxes]).reshape(-1, 5)  # (1, 5)
+            # No person detected in this frame, skip HMR processing
+            continue
 
         # Process HMR for all persons (img_ck and box_ck are now defined)
         if len(img_ck_dict.keys()) > 0:
@@ -1186,14 +1225,50 @@ if __name__=='__main__':
                                         'pred_shape':[],
                                         'pred_rotmat':[],
                                         'pred_trans':[],
+                                        'frame_ids':[],  # Track which frames have results for this person
                                         'cache':None}
 
-                frame_results, frame_feat_cache = camera_coord_HMR(
-                    hmr_model, img_ck_dict[pk], box_ck_dict[pk], results_dict[pk]['cache'], img_focal, img_center)
-            
+                # Check for invalid boxes (all zeros or invalid box dimensions)
+                box_ck = box_ck_dict[pk]
+                is_valid_box = False
+                if box_ck.shape[0] > 0 and box_ck.shape[1] >= 4:
+                    box_xyxy = box_ck[0, :4]  # [x1, y1, x2, y2]
+                    # Check if box is valid: non-zero area and positive dimensions
+                    box_width = box_xyxy[2] - box_xyxy[0]
+                    box_height = box_xyxy[3] - box_xyxy[1]
+                    is_valid_box = (box_width > 0 and box_height > 0 and 
+                                   not np.allclose(box_xyxy, 0) and
+                                   box_width < img_w * 2 and box_height < img_h * 2)  # Reasonable size check
+                
+                if not is_valid_box:
+                    breakpoint()
+                    print(f"Warning: Skipping invalid box for person {pk} at frame {i}: {box_ck}")
+                    continue
+                
+                try:
+                    frame_results, frame_feat_cache = camera_coord_HMR(
+                        hmr_model, img_ck_dict[pk], box_ck_dict[pk], results_dict[pk]['cache'], img_focal, img_center)
+                except Exception as e:
+                    print(f"Error processing HMR for person {pk} at frame {i}: {e}")
+                    print(f"  Box: {box_ck_dict[pk]}")
+                    print(f"  Image: {img_ck_dict[pk]}")
+                    # Skip this frame for this person
+                    continue
                 # NOTE(yiwen) two frame cache, shape[1] = h*w*mem_t
                 # print(f"cache length {frame_feat_cache['layers'][0]['mem_k'].shape}")
 
+                if i==2: # double the first frame of tracked keys 
+                    results_dict[pk]['frame_ids'].append(i-1)
+                    results_dict[pk]['pred_cam'].append(frame_results['pred_cam'])
+                    results_dict[pk]['pred_pose'].append(frame_results['pred_pose'])
+                    results_dict[pk]['pred_shape'].append(frame_results['pred_shape'])
+                    results_dict[pk]['pred_rotmat'].append(frame_results['pred_rotmat'])
+                    results_dict[pk]['pred_trans'].append(frame_results['pred_trans'])
+
+                    fix_scaler = refined_scaler # set the scaler
+
+                # Store frame ID along with results
+                results_dict[pk]['frame_ids'].append(i)
                 results_dict[pk]['pred_cam'].append(frame_results['pred_cam'])
                 results_dict[pk]['pred_pose'].append(frame_results['pred_pose'])
                 results_dict[pk]['pred_shape'].append(frame_results['pred_shape'])
@@ -1201,15 +1276,6 @@ if __name__=='__main__':
                 results_dict[pk]['pred_trans'].append(frame_results['pred_trans'])
                 results_dict[pk]['cache'] = frame_feat_cache
 
-                if i==2: # double the first frame of tracked keys
-                    results_dict[pk]['pred_cam'].append(frame_results['pred_cam'])
-                    results_dict[pk]['pred_pose'].append(frame_results['pred_pose'])
-                    results_dict[pk]['pred_shape'].append(frame_results['pred_shape'])
-                    results_dict[pk]['pred_rotmat'].append(frame_results['pred_rotmat'])
-                    results_dict[pk]['pred_trans'].append(frame_results['pred_trans'])
-
-                if i==0:
-                    fix_scaler = refined_scaler
                 # world coord camera trajectory
                 current_camt = torch.tensor([fix_scaler*x_smooth, fix_scaler*y_smooth, fix_scaler*z_smooth]).unsqueeze(0)
                 # current_camt = torch.tensor([fix_scaler*x, fix_scaler*y, fix_scaler*z]).unsqueeze(0)
@@ -1245,13 +1311,36 @@ if __name__=='__main__':
     # cam coord results of the whole sequence, for eval
     os.makedirs(args.save_dir, exist_ok=True)
     for pk in results_dict.keys():
-        print(f"Multiple persons detected, save all poses.")
-        cam_coord_results = {'pred_cam': torch.cat(results_dict[pk]['pred_cam']),
+        if len(results_dict[pk]['frame_ids']) == 0:
+            print(f"Warning: Person {pk} has no valid results, skipping save.")
+            continue
+        
+        print(f"Saving poses for person {pk} ({len(results_dict[pk]['frame_ids'])} frames)")
+        
+        # Save with frame IDs to track which frames have results for this person
+        # This allows handling cases where a person is not detected in some frames
+        frame_ids = np.array(results_dict[pk]['frame_ids'])
+        
+        # Concatenate results for frames where this person was detected
+        if len(results_dict[pk]['pred_cam']) > 0:
+            cam_coord_results = {
+                'frame_ids': frame_ids,  # Track which frames have results
+                'pred_cam': torch.cat(results_dict[pk]['pred_cam']),
                 'pred_pose': torch.cat(results_dict[pk]['pred_pose']),
                 'pred_shape': torch.cat(results_dict[pk]['pred_shape']),
                 'pred_rotmat': torch.cat(results_dict[pk]['pred_rotmat']),
-                'pred_trans': torch.cat(results_dict[pk]['pred_trans'])}
-        np.savez(f'{args.save_dir}/{pk}_{name_prefix}.npz', **cam_coord_results)
+                'pred_trans': torch.cat(results_dict[pk]['pred_trans'])
+            }
+            # Convert torch tensors to numpy for npz format
+            cam_coord_results_np = {}
+            for key, value in cam_coord_results.items():
+                if isinstance(value, torch.Tensor):
+                    cam_coord_results_np[key] = value.cpu().numpy()
+                else:
+                    cam_coord_results_np[key] = value
+            np.savez(f'{args.save_dir}/{pk}_{name_prefix}.npz', **cam_coord_results_np)
+        else:
+            print(f"Warning: Person {pk} has no valid predictions, skipping save.")
 
     # the final cam pose and scene pc after global optimization
     if dataset.save_results:
