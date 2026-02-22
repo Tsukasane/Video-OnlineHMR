@@ -3,6 +3,7 @@ import os
 import time
 from typing import Any, Optional
 
+import matplotlib.cm as cm
 import numpy as np
 import open3d as o3d
 import torch
@@ -178,7 +179,9 @@ def _load_camera_for_vis(camera_path: str) -> tuple[Optional[np.ndarray], Option
 def render_viser_scene(
     *,
     human_npz_path: Optional[object],
+    human_npz_dir: Optional[str] = None,
     camera_path: str,
+    ply_path: Optional[str] = None,
     stride: int = 5,
     human_stride: int = 20,
     static: bool = False,
@@ -199,7 +202,20 @@ def render_viser_scene(
         return
 
     human_tracks: list[dict[str, Any]] = []
-    human_paths = _normalize_human_npz_paths(human_npz_path)
+    if human_npz_dir and human_npz_path:
+        print("Provide only one of human_npz_dir or human_npz_path.")
+        return
+    if human_npz_dir:
+        if not os.path.isdir(human_npz_dir):
+            print(f"Human npz dir not found or invalid: {human_npz_dir}")
+            return
+        human_paths = [
+            os.path.join(human_npz_dir, name)
+            for name in sorted(os.listdir(human_npz_dir))
+            if name.lower().endswith(".npz")
+        ]
+    else:
+        human_paths = _normalize_human_npz_paths(human_npz_path)
     for human_path in human_paths:
         verts_world, faces, frame_ids = load_human_world_vertices(human_path, camera_path)
         if verts_world is None or faces is None or frame_ids is None:
@@ -224,6 +240,15 @@ def render_viser_scene(
             max_human_frame = max(max_human_frame, int(np.max(track["frame_ids"])))
     timeline_steps = max(full_cam_steps, max_human_frame + 1 if max_human_frame >= 0 else 0)
     world_origin = positions[0]
+    base_human_color = (249.0 / 255.0, 199.0 / 255.0, 155.0 / 255.0)
+    track_colors = [base_human_color for _ in human_tracks]
+    if len(human_tracks) > 1:
+        try:
+            cmap = cm.get_cmap("viridis")
+            samples = np.linspace(0.5, 1.0, len(human_tracks))
+            track_colors = [tuple(map(float, cmap(s)[:3])) for s in samples]
+        except Exception:
+            track_colors = [base_human_color for _ in human_tracks]
 
     def _make_line_segments(points_xyz: np.ndarray) -> np.ndarray:
         if points_xyz.shape[0] < 2:
@@ -287,6 +312,38 @@ def render_viser_scene(
     server = viser.ViserServer()
     server.scene.set_up_direction("-y")
 
+    if ply_path:
+        if not os.path.exists(ply_path):
+            print(f"Point cloud file not found or invalid: {ply_path}")
+        else:
+            try:
+                pcd = o3d.io.read_point_cloud(ply_path)
+                points = np.asarray(pcd.points, dtype=np.float32)
+                ply_scale = 1.0  # TODO: temporary scaling; replace with proper unit handling.
+                ply_yaw_deg = 0.0  # TODO: temporary horizontal clockwise rotation; replace with proper alignment handling.
+                yaw = np.deg2rad(-ply_yaw_deg)
+                rot_y = np.array(
+                    [
+                        [np.cos(yaw), 0.0, np.sin(yaw)],
+                        [0.0, 1.0, 0.0],
+                        [-np.sin(yaw), 0.0, np.cos(yaw)],
+                    ],
+                    dtype=np.float32,
+                )
+                colors = None
+                if pcd.has_colors():
+                    colors = np.asarray(pcd.colors, dtype=np.float32)
+                if points.size:
+                    points = (points * ply_scale) @ rot_y.T
+                    server.scene.add_point_cloud(
+                        name="/pointcloud",
+                        points=points,
+                        colors=colors,
+                        point_size=0.01,
+                    )
+            except Exception as exc:
+                print(f"Failed to load point cloud from {ply_path}: {exc}")
+
     color_cache: dict[int, np.ndarray] = {}
     def _color_array(n: int) -> np.ndarray:
         if n in color_cache:
@@ -335,6 +392,7 @@ def render_viser_scene(
     if human_tracks:
         if static:
             for track_idx, track in enumerate(human_tracks):
+                color = track_colors[track_idx]
                 for frame_idx, verts in enumerate(track["vertices"]):
                     handle = server.scene.add_mesh_simple(
                         name=f"/humans/{track_idx}/{frame_idx}",
@@ -343,13 +401,14 @@ def render_viser_scene(
                         flat_shading=False,
                         wireframe=False,
                         opacity=None,
-                        color=(249.0 / 255.0, 199.0 / 255.0, 155.0 / 255.0),
+                        color=color,
                         side="double",
                     )
                     handle.visible = gui_show_humans.value
                     static_human_mesh_handles.append(handle)
         else:
             for track_idx, track in enumerate(human_tracks):
+                color = track_colors[track_idx]
                 handle = server.scene.add_mesh_simple(
                     name=f"/humans/{track_idx}",
                     vertices=track["vertices"][0],
@@ -357,7 +416,7 @@ def render_viser_scene(
                     flat_shading=False,
                     wireframe=False,
                     opacity=None,
-                    color=(249.0 / 255.0, 199.0 / 255.0, 155.0 / 255.0),
+                    color=color,
                     side="double",
                 )
                 handle.visible = gui_show_humans.value
@@ -369,10 +428,8 @@ def render_viser_scene(
     def _select_human_frame(frame_ids: np.ndarray, base_step_idx: int) -> Optional[int]:
         if frame_ids.size == 0:
             return None
-        if base_step_idx < frame_ids[0] or base_step_idx > frame_ids[-1]:
-            return None
-        idx = int(np.searchsorted(frame_ids, base_step_idx, side="right") - 1)
-        if idx < 0 or idx >= frame_ids.size:
+        idx = int(np.searchsorted(frame_ids, base_step_idx, side="left"))
+        if idx >= frame_ids.size or frame_ids[idx] != base_step_idx:
             return None
         return idx
 
@@ -479,32 +536,42 @@ def render_viser_scene(
         gui_prev_frame.disabled = gui_playing.value or timeline_steps == 0
 
     base_step = 0.0
-    last_time = time.time()
+    last_time = time.perf_counter()
+    accumulator = 0.0
     while True:
-        now = time.time()
+        now = time.perf_counter()
         dt = now - last_time
         last_time = now
         if not static and gui_playing.value and timeline_steps > 0:
-            frame_advance = dt * gui_fps.value
-            base_step = (base_step + frame_advance) % timeline_steps
-            gui_timestep.value = int(base_step)
+            accumulator += dt
+            frame_interval = 1.0 / max(gui_fps.value, 1e-6)
+            steps = int(accumulator / frame_interval)
+            if steps > 0:
+                base_step = (base_step + steps) % timeline_steps
+                gui_timestep.value = int(base_step)
+                accumulator -= steps * frame_interval
         else:
             base_step = float(gui_timestep.value)
+            accumulator = 0.0
         time.sleep(1.0 / max(gui_fps.value, 1e-3))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Minimal Viser demo for human trajectories.")
     parser.add_argument("--human_npz_path", type=str, nargs="*", required=False, help="Path(s) to human prediction npz. Repeat or provide multiple values.")
+    parser.add_argument("--human_npz_dir", type=str, required=False, help="Directory of human prediction npz files.")
     parser.add_argument("--camera_path", type=str, required=True, help="Camera trajectory txt for the human prediction.")
-    parser.add_argument("--stride", type=int, default=5, help="Stride for sampling camera poses.")
+    parser.add_argument("--ply_path", type=str, required=False, help="Optional .ply point cloud to render.")
+    parser.add_argument("--stride", type=int, default=1, help="Stride for sampling camera poses.")
     parser.add_argument("--human_stride", type=int, default=1, help="Stride for subsampling human meshes.")
     parser.add_argument("--static", action="store_true", help="Use a static viser view (no autoplay).")
     args = parser.parse_args()
 
     render_viser_scene(
         human_npz_path=args.human_npz_path,
+        human_npz_dir=args.human_npz_dir,
         camera_path=args.camera_path,
+        ply_path=args.ply_path,
         stride=args.stride,
         human_stride=args.human_stride,
         static=args.static,
