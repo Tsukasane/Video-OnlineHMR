@@ -43,6 +43,15 @@ wget -P ./checkpoints/ https://download.europe.naverlabs.com/ComputerVision/MASt
 wget -P ./checkpoints/ https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_trainingfree.pth
 wget -P ./checkpoints/ https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_codebook.pkl
 
+git clone https://huggingface.co/Ruicheng/moge-2-vitl-normal/
+mv moge-2-vitl-normal/model.pt ./data/pretrain/mogev2_model.pt
+rm -rf moge-2-vitl-normal
+
 # Our checkpoint
 mkdir -p ./results/onlinehmr
 gdown -O ./results/onlinehmr/checkpoint.pth.tar "https://drive.google.com/uc?id=1bbMhJyk9Qk5Ub01y7MJG5xFzRRkKB2Mm" 
+
+# World eval
+gdown -O ./results/emdb2_results.zip "https://drive.google.com/uc?id=1XIoaUSTK_3QYgJuZXph_xIdrUxtii17n"
+unzip results/emdb2_results.zip -d results/
+rm -rf results/emdb2_results.zip 

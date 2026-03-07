@@ -18,8 +18,8 @@
 
     # MASt3R-SLAM installation
     cd MASt3R-SLAM/
-    pip install --no-build-isolation -e thirdparty/mast3r
     git submodule update --init --recursive
+    pip install --no-build-isolation -e thirdparty/mast3r
     pip install thirdparty/in3d
     pip install --no-build-isolation -e .
     pip install torchcodec==0.1
@@ -89,15 +89,15 @@
 ## Run demo on videos
 ```bash
 # inference
-python ./scripts/run_custom.py --video <YOUR/VIDEO/PATH>.mp4 --calib false --depth-mask
+python ./scripts/run_custom.py --video <YOUR/VIDEO/PATH>.mp4 --no-viz --calib false --depth-mask
 
 # inference w tracking (multipersons)
 python ./scripts/run_custom_mt.py --video <YOUR/VIDEO/PATH>.mp4 --no-viz --calib false --depth-mask
 ```
 Results are saved to
-* ``./res_human_camera/global_results`` -- global optimized scene
-* ``./res_human_camera/{trackID}_{videoName}*.npz`` -- camera coordinate human motion
-* ``./logs/*.images_incremental_all.txt`` -- incremental camera extrinsics estimated by SLAM
+* ``./res_human_camera/global_results`` (global optimized scene).
+* ``./res_human_camera/{trackID}_{videoName}*.npz`` (camera coordinate human motion).
+* ``./logs/*_images_incremental_all.txt`` (incremental camera extrinsics).
 ```bash
 # visualization
 python visualize_viser.py --human_npz_path <HUMAN/NPZ/PATH>.npz --camera_path <CAMERA/TXT/PATH>.txt
@@ -112,30 +112,13 @@ python train.py --cfg configs/config_vimo.yaml
 The training log and output will be placed at ``./results``. Set ``self.visualize_spec=True`` in ``./lib/utils/pose_utils.py`` if you want to visualize the 3D joint spectrogram.
 
 ## Evaluation
+For camera coordinate evaluation, you can keep the current config, then run the above training script. Before starting the resumed training, the eval code will run on the checkpoint you downloaded before and produce camera coordinate metrics.
 ```Bash
-# run inference on emdb2 testset (set --calib true), split 2 indicates the emdb2 subset
-python scripts/emdb/run_cam_mast3r_slam.py --split 2 --output_dir "results/emdb/camera-mast3rslam" --no-viz --calib true --soft-mask true --depth-mask
-
 # cam traj eval
-python ./scripts/emdb/cam_only_eval.py --camera_root <PRED_CAMERA_DIR>
+python ./scripts/emdb/cam_only_eval.py --camera_root results/emdb2_results/camera
 
 # world coords HMR eval
-python ./scripts/emdb/run_eval_mast3r_slam.py --split 2 --human_rootdir <PRED_HUMAN_DIR> --camera_rootdir <PRED_CAMERA_DIR>
+python ./scripts/emdb/run_eval_mast3r_slam.py --split 2 --human_rootdir results/emdb2_results/human --camera_rootdir results/emdb2_results/camera
 ```
-The output camera trajectory is saved to ``./logs``, Camera coordinates HMR result is saved to ``./res_human_camera``.
 
-**Metrics**
-- Pose and Shape
-    * MPJPE: mean per-joint error.
-    * PA-MPJPE: Procrustes-aligned per-joint error.
-    * PVE: per-vertex error.
-    * ACCEL: acceleration error against the ground truth acceleration.
-
-- Camera Trajectory
-    * ATE: absolute trajectory error
-
-- Human Trajectory
-    * W-MPJPE100: slice a sequence into 100-frame segments and evaluate 3D joint error after aligning the first two frames
-    * WA-MPJPE100: Align the entire segment
-    * ERVE: egocentric-frame root velocity error (measure the root motion accuracy)
-    * RTE: root translation error normalized by the total displacement after rigid alignment without scaling
+## Acknowledgement

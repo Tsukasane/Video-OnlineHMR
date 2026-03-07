@@ -26,10 +26,10 @@ from deva.inference.demo_utils import get_input_frame_for_deva
 #         '--detection_every', '5']
 
 # For fully online mode (no delay, immediate results):
-args = ['--chunk_size', '1', '--amp', '--temporal_setting', 'online',
+args = ['--chunk_size', '4', '--amp', '--temporal_setting', 'online',
         '--size', '480', '--model', 'data/pretrain/DEVA-propagation.pth',
         '--suppress_small_objects', '--max_long_term_elements', '1000', '--max_num_objects', '50',
-        '--detection_every', '1']  # Detect every frame for online mode
+        '--detection_every', '5']  # Detect every frame for online mode --chunk_size, '1'  '--detection_every', '5'
 
 parser = ArgumentParser()
 add_common_eval_args(parser)
@@ -244,8 +244,6 @@ def match_detections_to_tracks(det_boxes, det_confs, track_result, iou_thresh=0.
             'track_boxes': Dict {track_id: [x1, y1, x2, y2]} - bboxes from tracking masks
         }
     """
-    import torch
-    import torchvision.ops
     
     # Filter detections by confidence
     valid_det_mask = det_confs >= conf_thresh
@@ -266,8 +264,6 @@ def match_detections_to_tracks(det_boxes, det_confs, track_result, iou_thresh=0.
     object_ids = track_result['object_ids']
     track_boxes_dict = extract_boxes_from_prob(prob, object_ids)
 
-    breakpoint()
-    
     if len(track_boxes_dict) == 0:
         return {
             'matched': [],

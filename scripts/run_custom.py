@@ -397,28 +397,28 @@ if __name__=='__main__':
     parser.add_argument("--video", type=str, required=True, help="path to the input video")
     parser.add_argument("--smooth-method", type=str, default='ema', 
                        choices=['none', 'ema'],
-                       help='Smoothing method for camera poses: none, moving_avg, ema, kalman')
+                       help='Smoothing method for camera poses')
     parser.add_argument("--smooth-window", type=int, default=5,
-                       help='Window size for moving average smoothing (default: 5)')
+                       help='Window size for moving average smoothing')
     parser.add_argument("--smooth-alpha", type=float, default=0.2,
-                       help='Alpha for exponential moving average (0-1, default: 0.3)')
+                       help='Alpha for exponential moving average (0-1)')
     parser.add_argument("--ema-history", type=int, default=10,
-                       help='Number of history frames to use for EMA weighted average (default: 10)')
+                       help='Number of history frames to use for EMA weighted average')
     parser.add_argument("--ema-clamp-multiplier", type=float, default=0.2,
-                       help='Multiplier for velocity-based clamp threshold (default: 0.2, lower = stricter)')
+                       help='Multiplier for velocity-based clamp threshold')
     parser.add_argument("--ema-clamp-absolute-max", type=float, default=None,
                        help='Absolute maximum update allowed regardless of velocity (default: None, disabled)')
     parser.add_argument("--update-slam-pose", action="store_true",
                        help='Update SLAM internal pose with smoothed pose (may affect optimization)')
     parser.add_argument("--mask-method", type=str, default='both',
                        choices=['none', 'gaussian', 'dilation', 'both'],
-                       help='Method for mask soft margin: none, gaussian, dilation, both (default: gaussian)')
+                       help='Method for mask soft margin: none, gaussian, dilation, both')
     parser.add_argument("--mask-kernel-size", type=int, default=15,
-                       help='Kernel size for mask processing (default: 15)')
+                       help='Kernel size for mask processing')
     parser.add_argument("--mask-sigma", type=float, default=5.0,
-                       help='Sigma for Gaussian blur in mask processing (default: 5.0)')
+                       help='Sigma for Gaussian blur in mask processing')
     parser.add_argument("--mask-dilation-iterations", type=int, default=3,
-                       help='Number of dilation iterations for mask processing (default: 3)')
+                       help='Number of dilation iterations for mask processing')
     parser.add_argument("--depth-mask", action="store_true",
                        help='Apply human mask to depth maps (SLAM depth and metric depth) when computing scaler')
 

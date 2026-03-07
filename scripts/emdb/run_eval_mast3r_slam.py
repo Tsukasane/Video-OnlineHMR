@@ -48,8 +48,6 @@ for f in failed_seqs:
     emdb.pop(f-failed_cnt)
     failed_cnt += 1
 
-emdb = emdb[2:3]
-
 # SMPL
 smpl = SMPL()
 smpls = {g:SMPL(gender=g) for g in ['neutral', 'male', 'female']}
@@ -121,7 +119,7 @@ for root in tqdm(emdb):
 
     pred_camt_ls = []
     pred_camr_ls = []
-    depth_frame_register = 4
+    depth_frame_register = 2
     if depth_frame_register:
         naive_scaler = 0.0
         for fm in range(depth_frame_register):
