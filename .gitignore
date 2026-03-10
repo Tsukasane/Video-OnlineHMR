@@ -1,19 +1,1 @@
 __pycache__
-data/
-results/
-./datasets/
-*.png
-*.out
-*.mov
-*.mp4
-note.txt
-
-README.md
-logs/
-pytorch3d/
-checkpoints/
-res_human_camera/
-# thirdparty/MASt3R-SLAM # temp
-thirdparty/pytorch3d
-
-thirdparty/MASt3R-SLAM/checkpoints

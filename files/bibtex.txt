@@ -1,0 +1,6 @@
+@article{zhang2024monst3r,
+  author    = {Zhang, Junyi and Herrmann, Charles and Hur, Junhwa and Jampani, Varun and Darrell, Trevor and Cole, Forrester and Sun, Deqing and Yang, Ming-Hsuan},
+  title     = {MonST3R: A Simple Approach for Estimating Geometry in the Presence of Motion},
+  journal   = {arXiv preprint arxiv:2410.03825},
+  year      = {2024}
+}

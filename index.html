@@ -1,0 +1,273 @@
+<html>
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>OnlineHMR: Video-based Online World-Grounded Human Mesh Recovery</title>
+  <link href="./files/style.css" rel="stylesheet">
+  <script type="text/javascript" src="./files/jquery.mlens-1.0.min.js"></script>
+  <script type="text/javascript" src="./files/jquery.js"></script>
+  <style>
+    .divider {
+      border-right: 2px dashed #737373;
+      width: 2px;
+    }
+  </style>
+  <style>
+    .divider_horizontal {
+      border-top: 2px dashed #737373;
+      display: block;
+      width: 100%;
+      margin: 10px 0;
+    }
+  </style>
+  <!-- Begin new styles from demos page -->
+  <style>
+    body {
+      padding: 2em;
+      font-family: sans-serif;
+    }
+
+    iframe {
+      border-radius: 0.5em;
+      width: 27.5em;
+      height: 27.5em;
+      border: none;
+      box-shadow: 0 0 1em 0em rgba(0, 0, 0, 0.15);
+    }
+
+    @media (max-width: 768px) {
+      iframe {
+        width: 100%;
+        height: 30em;
+      }
+    }
+
+    a,
+    a:link {
+      color: #777;
+    }
+
+    /* Styles for the instruction icons and text */
+    .instructions {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1.2em;
+      text-align: center;
+      padding: 0.6em;
+    }
+
+    .instruction-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5em;
+      font-size: 1.2em;
+    }
+
+    .instruction-item img {
+      width: 36px;
+      height: 36px;
+    }
+
+    .instructions_small {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1em;
+      text-align: center;
+      padding: 0.5em;
+    }
+
+    .instruction-item_small {
+      display: flex;
+      align-items: center;
+      gap: 0.3em;
+      font-size: 1.0em;
+    }
+
+    .instruction-item_small img {
+      width: 30px;
+      height: 30px;
+    }
+  </style>
+  <!-- End new styles -->
+</head>
+
+<body>
+  <div class="content">
+    <h1 style="line-height: 0.75; font-size:28">
+      <strong>OnlineHMR: Video-based Online World-Grounded Human Mesh Recovery
+    </h1>
+    <p id="authors">
+      <span>
+        <a href="https://tsukasane.github.io/">Yiwen Zhao<sup>1</sup></a>
+      </span>
+      <span>
+        <a href="https://zczcwh.github.io/">Ce Zheng<sup>1</sup></a>
+      </span>
+      <span>
+        <a href="https://yufu-wang.github.io/">Yufu Wang<sup>2</sup></a>
+      </span>
+      <span>
+        <a href="https://www.linkedin.com/in/hsuehhan-yang/">Hsueh-Han Daniel Yang<sup>1</sup></a>
+      </span>
+      <br>
+      <span>
+        <a href="https://www.linkedin.com/in/liting-wen">Liting Wen<sup>1</sup></a>
+      </span>
+      <span>
+        <a href="https://laszlojeni.com/index.html#lab">Laszlo A. Jeni<sup>1</sup></a>
+      </span>
+      <br>
+      <span class="institution"><a href="https://www.cmu.edu"><sup>1</sup> Carnegie Mellon University</a>
+        <a href="https://www.upenn.edu"><sup>2</sup> University of Pennsylvania</a>
+      <span class="institution"></span>
+      <br>
+    </p>
+    </p>
+
+    <img class="summary-img" src="./files/teaser.png" style="width:80%;">
+    <br>
+    <a style="text-align:center">
+      <font size="+1">
+        Given a streaming video as input, OnlineHMR recovers the world coordinates human mesh and camera trajectory in an online manner.
+      </font>
+    </a>
+    <font size="+2">
+      <p style="text-align: center;">
+        <a href="" target="_blank">[Arxiv]</a> &nbsp;&nbsp;&nbsp;&nbsp;
+        <a href="https://github.com/Tsukasane/Video-OnlineHMR" target="_blank">[Code]</a>&nbsp;&nbsp;&nbsp;&nbsp;
+      </p>
+    </font>
+  </div>
+
+  <div class="content">
+    <h2>Interactive 4D Visualization</h2>
+    <p>Explore the 4D reconstruction results of MonST3R on various dynamic scenes. For more results, please visit the <a href="page1.html" style="font-weight: bold; color: rgb(238, 60, 223);">interactive results</a>.</p>
+    <!-- Instructions with icons -->
+    <div class="instructions" style="margin-top: -1em;">
+      <div class="instruction-item" style="display: flex; align-items: center;">
+        <img src="icons/left-click.png" alt="Left Click" style="margin-right: 0px;">
+        <span>Drag with <em>left</em> click to <strong>rotate</strong> view</span>
+      </div>
+
+      <div class="instruction-item" style="display: flex; align-items: center; margin-top: 10px;">
+        <img src="icons/scroll-wheel.png" alt="Scroll Wheel" style="margin-right: -5px;">
+        <span>Scroll to <strong>zoom</strong> in/out</span>
+      </div>
+
+      <div class="instruction-item" style="display: flex; align-items: center; margin-top: 10px;">
+        <img src="icons/right-click.png" alt="Right Click" style="margin-right: 0px;">
+        <span>Drag with <em>right</em> click to <strong>move</strong> view</span>
+      </div>
+    </div>
+
+    <div class="instructions_small">
+      <div class="instruction-item_small" style="display: flex; align-items: center; margin-top: -15px;">
+        <img src="icons/letter-w.png" alt="W" style="margin-right: -10px;">
+        <img src="icons/letter-s.png" alt="S" style="margin-right: 0px;">
+        <span>Moving forward and backward</span>
+      </div>
+
+      <div class="instruction-item_small" style="display: flex; align-items: center; margin-top: -15px;">
+        <img src="icons/letter-a.png" alt="A" style="margin-right: -10px;">
+        <img src="icons/letter-d.png" alt="D" style="margin-right: 0px;">
+        <span>Moving left and right</span>
+      </div>
+
+      <div class="instruction-item_small" style="display: flex; align-items: center; margin-top: -15px;">
+        <img src="icons/letter-q.png" alt="Q" style="margin-right: -10px;">
+        <img src="icons/letter-e.png" alt="E" style="margin-right: 0px;">
+        <span>Moving upward and downward</span>
+      </div>
+    </div>
+
+    <!-- Downsampling note -->
+    <p style="text-align: center; font-size: 1em; padding: 0em; color: #555;">
+      (Results are downsampled <strong>4 times</strong> for efficient online rendering)
+    </p>
+
+    <!-- Wrapper for iframes -->
+    <div id="wrapper" style="
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: center;
+          align-items: center;
+          gap: 2em;
+        ">
+      <!-- Insert two iframes -->
+      <iframe
+        src="https://tsukasane.github.io/Video-OnlineHMR/build/?playbackPath=https://tsukasane.github.io/Video-OnlineHMR/dance_5.viser&initDistanceScale=1&initHeightOffset=0.0"></iframe>
+
+      <iframe
+        src="https://MonST3R-project.github.io/build/?playbackPath=https://MonST3R-project.github.io/recordings/recording_judo.viser&initDistanceScale=0.2&initHeightOffset=0.175"></iframe>
+    </div>
+  </div>
+
+  <div class="content">
+    <h2 style="text-align:center;">Abstract</h2>
+    <font size="-0.">
+    <p>Human mesh recovery (HMR) models 3D human body from monocular videos, with recent works extending it to world-coordinate human trajectory and motion reconstruction. 
+      However, most existing methods remain offline, relying on future frames or global optimization, which limits their applicability in interactive feedback and perception-action loop scenarios such as AR/VR and telepresence. 
+      To address this, we propose OnlineHMR, a fully online framework that jointly satisfies four essential criteria of online processing, including system-level causality, efficiency, faithfulness, and temporal consistency. 
+      Built upon the TRAM architecture, OnlineHMR enables streaming inference via a causal key–value cache design and a curated sliding-window learning strategy. 
+      Meanwhile, a human-centric incremental SLAM provides online world-grounded alignment under physically plausible trajectory correction. 
+      Experimental results show that our method achieves performance comparable to existing chunk-based approaches on the standard EMDB benchmark and highly dynamic custom videos, while uniquely supporting online processing.
+    </p>
+  </font>
+  </div>
+
+  <div class="content">
+    <h2>Causality</h2>
+    <p>Leveraging information only from previous frames through a cache memory.</p>
+    <img class="summary-img" src="./files/online_processing.png" style="width:100%;margin-bottom: -10px;">
+    <br>
+    <a>
+      Input: a streaming video. Output: World coordinate streaming SMPL. <br>
+      1) Camera coordinates OnlineHMR estimate the parametric human model in camera space. 
+      2) Human-Centric Incremental SLAM estimates camera extrinsic.
+      3) Metrics depth together with SLAM depth to scale the SLAM outputs to world.
+    </a>
+  </div>
+  
+  <div class="content">
+    <h2>Temporal Consistency</h2>
+    <img class="summary-img" src="./files/temporal_consistency.png" style="width:100%;">
+    <a>
+      Alleviate camera coordinate human jittering through sliding window learning. 
+      Handling a large proportion of dynamic humans on SLAM by soft masking. 
+      Enforce smooth camera extrinsic switching through physical constraints on the camera. 
+      Together, get a more natural world coordinate human.
+    </a>
+  </div>
+
+  <div class="content">
+    <h2>Faithfuness</h2>
+    <p> Quantitatively, we compare our result with previous and concurrent offline/online methods on camera coordinate benchmark 3DPW and EMDB1, and world coordinate benchmark EMDB2. 
+      Qualitatively, we task our method on custom art and sport videos.
+    </p>
+    <img class="summary-img" src="./files/quan_results.png" style="width:90%;">
+    <center>
+    <video width="80%" controls>
+      <source src="./files/result_video.mp4" type="video/mp4">
+    </video>
+    </center>
+    <a>0:00-1:20, custom videos. 1:20-2:58, EMDB2.</a>
+  </div>
+
+  <div class="content">
+    <h2>Efficiency</h2>
+    <img class="summary-img" src="./files/effi_results.png" style="width:66%; margin-top: 2px; margin-bottom: 0px;">
+    <a>We report two metrics, frame-per-second (FPS) and average delay time (seconds) per frame (Avg. Delay). Results show that online methods have significantly lower delay compared to offline methods. Although our OnlineHMR has the max Avg. Delay among all online methods, we have a better accuracy in both camera coordinate and world coordinate results. with detailed analysis on our paper.</a>
+  </div>
+  
+  <div class="content" id="acknowledgements">
+    <h2>Acknowledgements</h2>
+      We borrow this template from <a href="https://monst3r-project.github.io/">MonST3R</a>
+    </p>
+  </div>
+</body>
+
+</html>
