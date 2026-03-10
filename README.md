@@ -1,4 +1,11 @@
-# Video-based Online Human Mesh Recovery
+# OnlineHMR: Video-based Online World-Grounded Human Mesh Recovery
+<img src="assets/teaser.png" width="100%" />
+
+-- --
+<div align="center">
+  <img src="assets/onlinehmr_repo.gif" width="49%" />
+  <img src="assets/onlinehmr_repo2.gif" width="49%" />
+</div>
 
 ## Installation
 1. Clone this repo with the `--recursive` flag (Please follow the corresponding licenses of thirdparty models). 
@@ -11,6 +18,14 @@
     # Base environment installation
     conda create -n onlinehmr python=3.11.5 cmake
     conda activate onlinehmr
+    
+    # if run on cluster, first decide which pair of CUDA and gcc to use, for example:
+    module spider cuda-toolkit
+    module load cuda/12.4.0
+    module spider gcc
+    module load gcc/13.2.1-p20240113
+
+    # then install the corresponding torch...
     pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
     pip install --no-build-isolation git+https://github.com/mattloper/chumpy.git
     pip install -r requirements.txt
@@ -104,6 +119,16 @@ python visualize_viser.py --human_npz_path <HUMAN/NPZ/PATH>.npz --camera_path <C
 ```
 You can also use scripts under ``vis_tools/`` to check visualization in ``.gif`` format.
 
+The projected result on image can be visualized by 
+```bash
+python scripts/visualize_smpl_projection.py \
+        --image_dir results/<videoName>/images \
+        --camera_txt logs/<videoName>_images_incremental_all.txt \
+        --smpl_npz res_human_camera/<personID>_<videoName>.npz \
+        --output_dir vis_smpl_projection \
+        --draw_mesh
+```
+
 ## Training
 ```Bash
 # Fine-tune a online camera coordinates HMR model based on HMR2.0
@@ -122,3 +147,4 @@ python ./scripts/emdb/run_eval_mast3r_slam.py --split 2 --human_rootdir results/
 ```
 
 ## Acknowledgement
+We thank [TRAM](https://github.com/yufu-wang/tram/tree/main), [GVHMR](https://github.com/zju3dv/GVHMR?tab=readme-ov-file), [Human3R](https://github.com/fanegg/Human3R/tree/a2959bb667d29f6bb2d1c7ee40df57aa258a1537) for their code, [3DPW](https://virtualhumans.mpi-inf.mpg.de/3DPW/), [H3.6M](http://vision.imar.ro/human3.6m/description.php), [BEDLAM](https://bedlam.is.tue.mpg.de/), [EMDB](https://eth-ait.github.io/emdb/) for data, and [Viser](https://viser.studio/main/) for awesome visualization tool.

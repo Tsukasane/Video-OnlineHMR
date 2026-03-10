@@ -1,14 +1,5 @@
 """
 Visualize SMPL mesh projected onto images using camera extrinsics.
-
-Usage:
-    python scripts/visualize_smpl_projection.py \
-        --image_dir results/annab2n2_demo/images \
-        --camera_txt logs/annab2n2_demo_images_incremental_all.txt \
-        --smpl_npz res_human_camera/5802630_annab2n2_demo.npz \
-        --output_dir vis_smpl_projection \
-        --focal_length 500.0 \
-        --camera_center 320.0 240.0
 """
 
 import argparse
@@ -89,11 +80,6 @@ def world_to_camera_coords(vertices_world, R_cw, t_cw):
     Returns:
         vertices_cam: (N, 3) vertices in camera coordinates
     """
-    # Camera extrinsics: P_cam = R_cw * P_world + t_cw
-    # But typically we have T_WC (world to camera), so we need to invert
-    # If we have camera pose in world (T_WC), then:
-    # P_cam = R_WC^T * (P_world - t_WC)
-    
     # R_cw is rotation from world to camera
     # t_cw is camera position in world coordinates
     vertices_cam = (R_cw @ vertices_world.T).T + t_cw.reshape(1, 3)
@@ -157,10 +143,10 @@ def main():
                         help='NPZ file with SMPL parameters')
     parser.add_argument('--output_dir', type=str, required=True,
                         help='Output directory for visualization')
-    parser.add_argument('--focal_length', type=float, default=500.0, # TODO(yiwen) update this to the naive estimation
-                        help='Camera focal length (default: 500.0)')
-    parser.add_argument('--camera_center', type=float, nargs=2, default=[320.0, 240.0],
-                        help='Camera center (cx, cy) (default: 320.0 240.0)')
+    parser.add_argument('--focal_length', type=float, default=None,
+                        help='Camera focal length (optional)')
+    parser.add_argument('--camera_center', type=float, nargs=2, default=None,
+                        help='Camera center (cx, cy) (optional, will use image center if not provided)')
     parser.add_argument('--draw_mesh', action='store_true',
                         help='Draw mesh edges (slower but more detailed)')
     parser.add_argument('--draw_joints', action='store_true', default=True,
@@ -199,10 +185,20 @@ def main():
     img_h, img_w = first_img.shape[:2]
     print(f"Image size: {img_w}x{img_h}")
     
-    # Adjust camera center if needed (use image center as default)
-    if args.camera_center[0] == 320.0 and args.camera_center[1] == 240.0:
-        args.camera_center = [img_w / 2.0, img_h / 2.0]
-        print(f"Using image center as camera center: {args.camera_center}")
+    # Calculate camera intrinsics from image dimensions
+    if args.focal_length is None:
+        img_focal = max(img_w, img_h) * 0.8  # Rough estimate: 80% of max dimension
+        print(f"Estimated focal length: {img_focal}")
+    else:
+        img_focal = args.focal_length
+        print(f"Using provided focal length: {img_focal}")
+    
+    if args.camera_center is None:
+        img_center = np.array([img_w / 2., img_h / 2.])  # Image center
+        print(f"Using image center as camera center: {img_center}")
+    else:
+        img_center = np.array(args.camera_center)
+        print(f"Using provided camera center: {img_center}")
     
     # Process frames
     end_frame = args.end_frame if args.end_frame is not None else min(len(img_files), len(camera_extrinsics), len(smpl_data['pred_rotmat']))
@@ -222,7 +218,7 @@ def main():
             continue
         
         cam_ext = camera_extrinsics[frame_idx]
-        scale = cam_ext['scale']
+
         t_wc = cam_ext['translation']  # Camera position in world coordinates (T_WC translation)
         q_wc = cam_ext['quaternion']   # Camera orientation quaternion (T_WC rotation)
         
@@ -274,8 +270,8 @@ def main():
         vertices_cam_torch = torch.from_numpy(vertices_cam).float().unsqueeze(0).to(device)  # (1, 6890, 3)
         joints_cam_torch = torch.from_numpy(joints_cam).float().unsqueeze(0).to(device)  # (1, 24, 3)
         
-        focal_length = torch.tensor([args.focal_length], device=device)
-        camera_center = torch.tensor([args.camera_center], device=device)  # (1, 2)
+        focal_length = torch.tensor([img_focal], device=device)
+        camera_center = torch.tensor([img_center], device=device)  # (1, 2)
         
         # Project vertices
         vertices_2d = perspective_projection(
