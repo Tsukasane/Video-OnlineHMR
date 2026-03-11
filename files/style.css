@@ -95,7 +95,7 @@ body {
   transform: rotate(0deg);
 }
 a, a:visited {
-  color: #224b8d;
+  color: #777;
   font-weight: 300;
 }
 #authors {
