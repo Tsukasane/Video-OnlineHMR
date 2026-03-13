@@ -1081,33 +1081,30 @@ if __name__=='__main__':
                 boxes = np.hstack([boxes, confs[:, None]])
                 boxes = arrange_boxes(boxes, mode='size', min_size=100)
 
-        if boxes.shape[0] > 0:
-            # Check if we need to initialize DEVA tracker
-            if '_deva_initialized' not in globals():
-                print(f"detect multiple persons, init tracking")
-                vid_length = len(imgfiles)
-                globals()['_deva'], globals()['_result_saver'] = get_deva_tracker(
-                    vid_length, "./output_deva", online_mode=False # NOTE(yiwen) need to init this even only has one person
-                )
-                globals()['_deva_initialized'] = True
-                globals()['_deva_track_with_mask'] = track_with_mask
 
-            # Filter high confidence detections for tracking
+        if '_deva_initialized' not in globals():
+            print(f"detect multiple persons, init tracking")
+            vid_length = len(imgfiles)
+            # Use semi-online mode (False) for better tracking stability, matching tram's approach
+            globals()['_deva'], globals()['_result_saver'] = get_deva_tracker(
+                vid_length, "./output_deva", online_mode=False
+            )
+            globals()['_deva_initialized'] = True
+            globals()['_deva_track_with_mask'] = track_with_mask
+
+        # Always call tracking, even if no detections (to propagate existing tracks)
+        # This is critical for maintaining track continuity
+        if boxes.shape[0] > 0:
+            # Filter high confidence detections for tracking (only high-conf detections are used as new detections)
             high_conf_mask = boxes[:, -1] > 0.80
-            print(f"debug -- boxes.shape {boxes.shape}")
             
             if high_conf_mask.sum() > 0:
                 track_valid = high_conf_mask
-                # masks_track = masks[track_valid] # 2, 652, 690
-                # scores_track = scores[track_valid] # (num_person, 1)
-                boxes_track = boxes[track_valid] # (num_person, 5)
+                boxes_track = boxes[track_valid]  # (num_person, 5)
 
                 # Re-generate masks and scores for the tracked boxes using SAM
-                # This ensures masks/scores match the current detection boxes
                 if boxes_track.shape[0] > 0:
                     with autocast('cuda'):
-                        # Only set image if not already set or if image changed
-                        # (SAM predictor caches the image, so we can reuse if same image)
                         sam_predictor.set_image(img_cv2, image_format='BGR')
                         bb_track = torch.tensor(boxes_track[:, :4]).to(device)
                         bb_track = sam_predictor.transform.apply_boxes_torch(bb_track, img_cv2.shape[:2])
@@ -1122,98 +1119,118 @@ if __name__=='__main__':
                 else:
                     masks_track = torch.empty((0,), dtype=torch.float32)
                     scores_track = torch.empty((0,), dtype=torch.float32)
-
-
-                img_rgb = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
-                imgpath = imgfiles[i] if imgfiles else None
-                
-                with autocast('cuda'):
-                    # Get tracking result (returns dict with 'prob', 'object_ids', etc.)
-                    globals()['_deva_track_with_mask'](
-                        globals()['_deva'], masks_track, scores_track, img_rgb,
-                        imgpath, globals()['_result_saver'], i, 
-                        save_vos=True, online_mode=True)
-                
-                # Match detection boxes to tracking results
-                det_boxes = boxes_track[:, :4]  # [N, 4] x1, y1, x2, y2
-                det_confs = boxes_track[:, -1]   # [N] confidence scores
-                
-                img_ck_dict = {}
-                box_ck_dict = {}
-
-                # match tracked segment to detections
-                vjson = globals()['_result_saver'].video_json
-                ann = vjson['annotations']
-
-                if len(ann)>0:
-                    frame_ann = vjson['annotations'][0]
-                    seg = frame_ann['segmentations']
-                    file = frame_ann['file_name']
-                    for subj in seg:  
-                        idx = subj['id']
-                        msk = subj['rle']
-                        msk = torch.from_numpy(masktool.decode(msk))[None]
-                        
-                        # Always compute seg_box from mask
-                        seg_box = torchvision.ops.masks_to_boxes(msk)
-                        
-                        if len(det_boxes)>0:
-                            iou = box_iou(det_boxes, seg_box)
-                            max_iou, max_id = iou.max(), iou.argmax()
-                            # Get confidence from boxes_track (which has [x1, y1, x2, y2, conf])
-                            # max_id corresponds to det_boxes index, which matches boxes_track index
-                            max_conf = boxes_track[max_id, -1] if max_id < len(boxes_track) else 0.0
-                        else:
-                            max_iou = max_conf = 0
-                            max_id = -1
-                        
-                        if max_iou>iou_thresh and max_conf>conf_thresh and max_id >= 0:
-                            det = True
-                            # Get full box with confidence from boxes_track [x1, y1, x2, y2, conf]
-                            det_box = boxes_track[[max_id]] if max_id < len(boxes_track) else np.zeros([1, 5])
-                        else:
-                            det = False
-                            det_box = np.zeros([1, 5])
-
-                        # add fields
-                        subj['frame'] = i  # Use frame index instead of frame object
-                        subj['det'] = det
-                        subj['det_box'] = det_box
-                        subj['seg_box'] = seg_box.numpy()
-                        
-                        if idx in tracks:
-                            tracks[idx].append(subj)
-                        else:
-                            tracks[idx] = [subj]
-                
-                if len(tracks.keys()) > 0: 
-                    # if we have multiple person in this frame
-                    # 1) process them sequentially
-                    # 2) store cache separately according to tracking id
-                    for k, v in tracks.items():
-                        img_ck_dict[k] = np.array([imgfiles[i]])
-
-                        # Get det_box from tracks (already has [x1, y1, x2, y2, conf] format)
-                        det_box = tracks[k][-1]['det_box']
-                        # Ensure it's [1, 5] format (x1, y1, x2, y2, conf)
-                        if det_box.shape[1] == 4:
-                            # If missing confidence, use 1.0 as default
-                            det_box_w_conf = np.hstack([det_box, np.array([[1.0]])])
-                        else:
-                            det_box_w_conf = det_box
-                        box_ck_dict[k] = det_box_w_conf
-                else:
-                    # Fallback: use first high-conf box if no matches
-                    img_ck_dict['-1'] = np.array([imgfiles[i]]) # NOTE(yiwen) cannot handle the first frame even using online mode tracking
-                    box_ck_dict['-1'] = boxes_track[0:1] if len(boxes_track) > 0 else boxes[0:1]
             else:
-                # No high confidence detections, use first box
-                new_k = list(img_ck_dict.keys())[0]
-                print(f"debug -- key -1")
-                img_ck_dict[new_k] = np.array([imgfiles[i]])
-                box_ck_dict[new_k]  = boxes[0:1]
+                # No high confidence detections, but still propagate existing tracks
+                # Use empty masks to let DEVA propagate from memory
+                masks_track = torch.zeros([1, img_cv2.shape[0], img_cv2.shape[1]], dtype=torch.float32)
+                scores_track = torch.zeros([1], dtype=torch.float32)
         else:
-            # No person detected in this frame, skip HMR processing
+            # No detections at all, but still propagate existing tracks
+            masks_track = torch.zeros([1, img_cv2.shape[0], img_cv2.shape[1]], dtype=torch.float32)
+            scores_track = torch.zeros([1], dtype=torch.float32)
+
+        # Always call tracking (critical for track continuity)
+        img_rgb = cv2.cvtColor(img_cv2, cv2.COLOR_BGR2RGB)
+        imgpath = imgfiles[i] if imgfiles else None
+        
+        with autocast('cuda'):
+            # Use semi-online mode (False) to match initialization and tram's approach
+            globals()['_deva_track_with_mask'](
+                globals()['_deva'], masks_track, scores_track, img_rgb,
+                imgpath, globals()['_result_saver'], i, 
+                save_vos=True, online_mode=False)  # Changed to False to match initialization
+        
+        # Match detection boxes to tracking results (only if we have detections)
+        img_ck_dict = {}
+        box_ck_dict = {}
+        
+        if boxes.shape[0] > 0:
+            # Get current frame's tracking results from video_json
+            # Note: In semi-online mode, results may have delay, so we need to find the right frame
+            vjson = globals()['_result_saver'].video_json
+            ann = vjson['annotations']
+            
+            # Find the annotation for current frame (or most recent one)
+            frame_ann = None
+            for a in ann:
+                if a['file_name'] == os.path.basename(imgpath):
+                    frame_ann = a
+                    break
+            
+            # If current frame not found (due to semi-online delay), use most recent
+            if frame_ann is None and len(ann) > 0:
+                frame_ann = ann[-1]  # Use most recent annotation
+            
+            if frame_ann is not None:
+                seg = frame_ann['segmentations']
+                det_boxes = boxes[:, :4]  # [N, 4] x1, y1, x2, y2
+                det_confs = boxes[:, -1]   # [N] confidence scores
+                
+                for subj in seg:  
+                    idx = subj['id']
+                    msk = subj['rle']
+                    msk = torch.from_numpy(masktool.decode(msk))[None]
+                    
+                    # Always compute seg_box from mask
+                    seg_box = torchvision.ops.masks_to_boxes(msk)
+                    
+                    if len(det_boxes) > 0:
+                        iou = box_iou(det_boxes, seg_box)
+                        max_iou, max_id = iou.max(), iou.argmax()
+                        max_conf = boxes[max_id, -1] if max_id < len(boxes) else 0.0
+                    else:
+                        max_iou = max_conf = 0
+                        max_id = -1
+                    
+                    if max_iou > iou_thresh and max_conf > conf_thresh and max_id >= 0:
+                        det = True
+                        det_box = boxes[[max_id]]
+                    else:
+                        det = False
+                        det_box = np.zeros([1, 5])
+
+                    # add fields
+                    subj['frame'] = i
+                    subj['det'] = det
+                    subj['det_box'] = det_box
+                    subj['seg_box'] = seg_box.numpy()
+                    
+                    if idx in tracks:
+                        tracks[idx].append(subj)
+                    else:
+                        tracks[idx] = [subj]
+            
+            # Build img_ck_dict and box_ck_dict from tracks
+            if len(tracks.keys()) > 0: 
+                for k, v in tracks.items():
+                    img_ck_dict[k] = np.array([imgfiles[i]])
+                    # Get det_box from tracks (already has [x1, y1, x2, y2, conf] format)
+                    det_box = tracks[k][-1]['det_box']
+                    # Ensure it's [1, 5] format
+                    if det_box.shape[1] == 4:
+                        det_box_w_conf = np.hstack([det_box, np.array([[1.0]])])
+                    else:
+                        det_box_w_conf = det_box
+                    box_ck_dict[k] = det_box_w_conf
+            else:
+                # Fallback: use first box if no tracks matched yet
+                if boxes.shape[0] > 0:
+                    img_ck_dict['-1'] = np.array([imgfiles[i]])
+                    box_ck_dict['-1'] = boxes[0:1]
+        else:
+            # No detections, but may have tracks from previous frames
+            if len(tracks.keys()) > 0:
+                for k, v in tracks.items():
+                    img_ck_dict[k] = np.array([imgfiles[i]])
+                    det_box = tracks[k][-1]['det_box']
+                    if det_box.shape[1] == 4:
+                        det_box_w_conf = np.hstack([det_box, np.array([[1.0]])])
+                    else:
+                        det_box_w_conf = det_box
+                    box_ck_dict[k] = det_box_w_conf
+        
+        # Skip HMR if no valid boxes found
+        if len(img_ck_dict.keys()) == 0:
             continue
 
         # Process HMR for all persons (img_ck and box_ck are now defined)
