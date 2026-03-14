@@ -24,27 +24,217 @@
   <style>
     body {
       padding: 2em;
-      font-family: sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+      font-size: 16px;
+      line-height: 1.6;
+      color: #333;
+      max-width: 1400px;
+      margin: 0 auto;
+      font-weight: normal;
+    }
+
+    h1 {
+      font-size: 2.2em;
+      font-weight: 700;
+      line-height: 1.2;
+      margin-bottom: 0.5em;
+      color: #222;
+    }
+
+    h2 {
+      font-size: 1.6em;
+      font-weight: 600;
+      line-height: 1.3;
+      margin-top: 0;
+      margin-bottom: 1em;
+      color: #3d5a3d;
+    }
+
+    p {
+      font-size: 1.05em;
+      line-height: 1.7;
+      margin-bottom: 1em;
+      color: #444;
+      font-weight: normal;
+    }
+
+    .content {
+      margin-bottom: 3em;
+    }
+
+    .content h2 {
+      margin-top: 0;
+      margin-bottom: 1em;
     }
 
     iframe {
       border-radius: 0.5em;
-      width: 27.5em;
-      height: 27.5em;
+      width: 100%;
+      height: 100%;
       border: none;
       box-shadow: 0 0 1em 0em rgba(0, 0, 0, 0.15);
     }
 
+    /* Video-iframe pair container */
+    .demo-pair {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1em;
+      margin-bottom: 2.5em;
+      width: 100%;
+      max-width: 45%;
+    }
+
+    .demo-pair video {
+      width: 100%;
+      max-width: 100%;
+      height: auto;
+      border-radius: 0.5em;
+      box-shadow: 0 0 1em 0em rgba(0, 0, 0, 0.15);
+    }
+
+    .demo-pair iframe {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      max-width: 100%;
+    }
+
+    /* Horizontal layout for vertical videos */
+    .demo-pair-horizontal {
+      flex-direction: row;
+      max-width: 90%;
+      align-items: center;
+    }
+
+    .demo-pair-horizontal video {
+      width: 30%;
+      max-width: 30%;
+      max-height: 500px;
+      height: auto;
+      object-fit: contain;
+    }
+
+    .demo-pair-horizontal iframe {
+      width: 55%;
+      max-width: 55%;
+      aspect-ratio: 1 / 1;
+    }
+
+    .demo-wrapper {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: flex-start;
+      gap: 2.5em;
+      margin-top: 2em;
+    }
+
+    @media (max-width: 1200px) {
+      .demo-pair {
+        max-width: 48%;
+      }
+    }
+
     @media (max-width: 768px) {
-      iframe {
+      body {
+        font-size: 15px;
+        padding: 1.5em;
+      }
+
+      h1 {
+        font-size: 1.8em;
+      }
+
+      h2 {
+        font-size: 1.4em;
+      }
+
+      p {
+        font-size: 1em;
+      }
+
+      .demo-pair {
+        max-width: 100%;
+        margin-bottom: 2em;
+      }
+
+      .demo-pair-horizontal {
+        flex-direction: column;
+        max-width: 100%;
+      }
+
+      .demo-pair-horizontal video {
         width: 100%;
+        max-width: 100%;
+      }
+
+      .demo-pair-horizontal iframe {
+        width: 100%;
+        max-width: 100%;
+      }
+      
+      .demo-wrapper {
+        gap: 2em;
+      }
+
+      iframe {
         height: 30em;
       }
     }
 
     a,
     a:link {
-      color: #777;
+      color: #555;
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+
+    a:hover {
+      color: #333;
+      text-decoration: none;
+    }
+
+    font {
+      font-family: inherit;
+    }
+
+    .institution {
+      font-size: 0.95em;
+      color: #666;
+    }
+
+    .institution a {
+      color: #666;
+    }
+
+    .institution a:hover {
+      color: #444;
+    }
+
+    /* Video container for centered videos */
+    .video-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin: 2em 0;
+      width: 100%;
+    }
+
+    .video-container video {
+      width: 85%;
+      max-width: 900px;
+      height: auto;
+      border-radius: 0.5em;
+      box-shadow: 0 0 1em 0em rgba(0, 0, 0, 0.15);
+    }
+
+    .video-caption {
+      text-align: center;
+      font-size: 0.95em;
+      color: #666;
+      margin-top: 1em;
+      font-style: italic;
     }
 
     /* Styles for the instruction icons and text */
@@ -53,21 +243,25 @@
       justify-content: center;
       align-items: center;
       flex-wrap: wrap;
-      gap: 1.2em;
+      gap: 1.5em;
       text-align: center;
-      padding: 0.6em;
+      padding: 1em 0.6em;
+      margin-bottom: 0.5em;
     }
 
     .instruction-item {
       display: flex;
       align-items: center;
       gap: 0.5em;
-      font-size: 1.2em;
+      font-size: 1.05em;
+      white-space: nowrap;
+      font-weight: 500;
     }
 
     .instruction-item img {
-      width: 36px;
-      height: 36px;
+      width: 32px;
+      height: 32px;
+      flex-shrink: 0;
     }
 
     .instructions_small {
@@ -75,21 +269,42 @@
       justify-content: center;
       align-items: center;
       flex-wrap: wrap;
-      gap: 1em;
+      gap: 1.2em;
       text-align: center;
       padding: 0.5em;
+      margin-top: 0.5em;
     }
 
     .instruction-item_small {
       display: flex;
       align-items: center;
       gap: 0.3em;
-      font-size: 1.0em;
+      font-size: 0.95em;
+      white-space: nowrap;
     }
 
     .instruction-item_small img {
-      width: 30px;
-      height: 30px;
+      width: 28px;
+      height: 28px;
+      flex-shrink: 0;
+    }
+
+    @media (max-width: 768px) {
+      .instructions {
+        gap: 1em;
+      }
+      
+      .instruction-item {
+        font-size: 1em;
+      }
+      
+      .instructions_small {
+        gap: 0.8em;
+      }
+      
+      .instruction-item_small {
+        font-size: 0.9em;
+      }
     }
   </style>
   <!-- End new styles -->
@@ -128,7 +343,7 @@
     </p>
     </p>
 
-    <img class="summary-img" src="./files/teaser.png" style="width:80%;">
+    <img class="summary-img" src="./files/updated_teaser.png" style="width:80%;">
     <br>
     <a style="text-align:center">
       <font size="+1">
@@ -144,78 +359,97 @@
   </div>
 
   <div class="content">
-    <h2>Interactive 4D Visualization</h2>
-    <p>Explore the 4D reconstruction results of MonST3R on various dynamic scenes. For more results, please visit the <a href="page1.html" style="font-weight: bold; color: rgb(238, 60, 223);">interactive results</a>.</p>
+    <h2>Interactive Gallery</h2>
+    <p>Explore the 4D reconstruction results on various number of individuals and diverse scene.</p>
     <!-- Instructions with icons -->
-    <div class="instructions" style="margin-top: -1em;">
-      <div class="instruction-item" style="display: flex; align-items: center;">
-        <img src="icons/left-click.png" alt="Left Click" style="margin-right: 0px;">
+    <div class="instructions">
+      <div class="instruction-item">
+        <img src="icons/left-click.png" alt="Left Click">
         <span>Drag with <em>left</em> click to <strong>rotate</strong> view</span>
       </div>
 
-      <div class="instruction-item" style="display: flex; align-items: center; margin-top: 10px;">
-        <img src="icons/scroll-wheel.png" alt="Scroll Wheel" style="margin-right: -5px;">
+      <div class="instruction-item">
+        <img src="icons/scroll-wheel.png" alt="Scroll Wheel">
         <span>Scroll to <strong>zoom</strong> in/out</span>
       </div>
 
-      <div class="instruction-item" style="display: flex; align-items: center; margin-top: 10px;">
-        <img src="icons/right-click.png" alt="Right Click" style="margin-right: 0px;">
+      <div class="instruction-item">
+        <img src="icons/right-click.png" alt="Right Click">
         <span>Drag with <em>right</em> click to <strong>move</strong> view</span>
       </div>
     </div>
 
     <div class="instructions_small">
-      <div class="instruction-item_small" style="display: flex; align-items: center; margin-top: -15px;">
-        <img src="icons/letter-w.png" alt="W" style="margin-right: -10px;">
-        <img src="icons/letter-s.png" alt="S" style="margin-right: 0px;">
+      <div class="instruction-item_small">
+        <img src="icons/letter-w.png" alt="W">
+        <img src="icons/letter-s.png" alt="S">
         <span>Moving forward and backward</span>
       </div>
 
-      <div class="instruction-item_small" style="display: flex; align-items: center; margin-top: -15px;">
-        <img src="icons/letter-a.png" alt="A" style="margin-right: -10px;">
-        <img src="icons/letter-d.png" alt="D" style="margin-right: 0px;">
+      <div class="instruction-item_small">
+        <img src="icons/letter-a.png" alt="A">
+        <img src="icons/letter-d.png" alt="D">
         <span>Moving left and right</span>
       </div>
 
-      <div class="instruction-item_small" style="display: flex; align-items: center; margin-top: -15px;">
-        <img src="icons/letter-q.png" alt="Q" style="margin-right: -10px;">
-        <img src="icons/letter-e.png" alt="E" style="margin-right: 0px;">
+      <div class="instruction-item_small">
+        <img src="icons/letter-q.png" alt="Q">
+        <img src="icons/letter-e.png" alt="E">
         <span>Moving upward and downward</span>
       </div>
     </div>
 
     <!-- Downsampling note -->
-    <p style="text-align: center; font-size: 1em; padding: 0em; color: #555;">
-      (Results are downsampled <strong>4 times</strong> for efficient online rendering)
+    <p style="text-align: center; font-size: 1em; padding: 0em; color: #555; margin-bottom: 1.5em;">
+      (Point clouds are downsampled for efficient online rendering)
     </p>
 
-    <!-- Wrapper for iframes -->
-    <div id="wrapper" style="
-          display: flex;
-          flex-wrap: wrap;
-          justify-content: center;
-          align-items: center;
-          gap: 2em;
-        ">
-      <!-- Insert two iframes -->
-      <!-- <iframe
-        src="https://tsukasane.github.io/Video-OnlineHMR/build/?playbackPath=https://tsukasane.github.io/Video-OnlineHMR/recordings/Demo3.viser&initDistanceScale=1&initHeightOffset=0.0"></iframe>
+    <!-- Wrapper for demo pairs -->
+    <div class="demo-wrapper">
+      <!-- Demo Pair 1 -->
+      <div class="demo-pair">
+        <video controls>
+          <source src="./recordings/bb_4.mp4" type="video/mp4">
+        </video>
+        <iframe
+          src="https://tsukasane.github.io/Video-OnlineHMR/build/?playbackPath=https://tsukasane.github.io/Video-OnlineHMR/recordings/bb_4.viser&initialCameraPosition=0,-4,0&initialCameraLookAt=-0.115,0.346,-0.192&initialCameraUp=0,0,3&initialCameraFov=0.7854&initialCameraNear=0.01&initialCameraFar=1000"></iframe>
+      </div>
 
-      <iframe
-        src="https://tsukasane.github.io/Video-OnlineHMR/build/?playbackPath=https://tsukasane.github.io/Video-OnlineHMR/recordings/Demo8_2_output.viser&initDistanceScale=1&initHeightOffset=0.0"></iframe>
+      <!-- Demo Pair 2 -->
+      <div class="demo-pair">
+        <video controls>
+          <source src="./recordings/Demo15_2_output.mp4" type="video/mp4">
+        </video>
+        <iframe
+          src="https://tsukasane.github.io/Video-OnlineHMR/build/?playbackPath=https://tsukasane.github.io/Video-OnlineHMR/recordings/Demo15_2_output_1.viser&initialCameraPosition=0,-4,0&initialCameraLookAt=-0.115,0.346,-0.192&initialCameraUp=0,0,3&initialCameraFov=0.7854&initialCameraNear=0.01&initialCameraFar=1000"></iframe>
+      </div>
 
-      <iframe
-        src="https://tsukasane.github.io/Video-OnlineHMR/build/?playbackPath=https://tsukasane.github.io/Video-OnlineHMR/recordings/Demo12_1_output.viser&initDistanceScale=1&initHeightOffset=0.0"></iframe>
+      <!-- Demo Pair 3 -->
+      <div class="demo-pair">
+        <video controls>
+          <source src="./recordings/Demo3.mp4" type="video/mp4">
+        </video>
+        <iframe
+          src="https://tsukasane.github.io/Video-OnlineHMR/build/?playbackPath=https://tsukasane.github.io/Video-OnlineHMR/recordings/Demo3.viser&initialCameraPosition=-4,-4,0&initialCameraLookAt=-0.115,1,-0.192&initialCameraUp=0,0,3&initialCameraFov=1.2"></iframe>
+      </div>
 
-      <iframe
-        src="https://tsukasane.github.io/Video-OnlineHMR/build/?playbackPath=https://tsukasane.github.io/Video-OnlineHMR/recordings/Demo14_1_output.viser&initDistanceScale=1&initHeightOffset=0.0"></iframe> -->
+      <!-- Demo Pair 4 -->
+      <div class="demo-pair">
+        <video controls>
+          <source src="./recordings/Demo8_2_output.mp4" type="video/mp4">
+        </video>
+        <iframe
+          src="https://tsukasane.github.io/Video-OnlineHMR/build/?playbackPath=https://tsukasane.github.io/Video-OnlineHMR/recordings/Demo8_2_output.viser&initialCameraPosition=0,-6,2&initialCameraLookAt=0,0.3,0&initialCameraUp=0,0,3&initialCameraFov=0.8"></iframe>
+      </div>
 
-      <iframe
-        src="https://tsukasane.github.io/Video-OnlineHMR/build/?playbackPath=https://tsukasane.github.io/Video-OnlineHMR/recordings/Demo15_2_output_1.viser&initDistanceScale=1&initHeightOffset=0.0"></iframe>
-
-      <iframe
-        src="https://tsukasane.github.io/Video-OnlineHMR/build/?playbackPath=https://tsukasane.github.io/Video-OnlineHMR/recordings/recording_judo.viser&initDistanceScale=0.2&initHeightOffset=0.175"></iframe>
-      
+      <!-- Demo Pair 5 (Vertical video - horizontal layout) -->
+      <div class="demo-pair demo-pair-horizontal">
+        <video controls>
+          <source src="./recordings/Demo12_1_output.mp4" type="video/mp4">
+        </video>
+        <iframe
+          src="https://tsukasane.github.io/Video-OnlineHMR/build/?playbackPath=https://tsukasane.github.io/Video-OnlineHMR/recordings/Demo12_1_output.viser&initialCameraPosition=0,-6,2&initialCameraLookAt=0,0.3,0&initialCameraUp=0,0,3&initialCameraFov=0.8"></iframe>
+      </div>
     </div>
   </div>
 
@@ -224,10 +458,8 @@
     <font size="-0.">
     <p>Human mesh recovery (HMR) models 3D human body from monocular videos, with recent works extending it to world-coordinate human trajectory and motion reconstruction. 
       However, most existing methods remain offline, relying on future frames or global optimization, which limits their applicability in interactive feedback and perception-action loop scenarios such as AR/VR and telepresence. 
-      To address this, we propose OnlineHMR, a fully online framework that jointly satisfies four essential criteria of online processing, including system-level causality, efficiency, faithfulness, and temporal consistency. 
-      Built upon the TRAM architecture, OnlineHMR enables streaming inference via a causal key–value cache design and a curated sliding-window learning strategy. 
-      Meanwhile, a human-centric incremental SLAM provides online world-grounded alignment under physically plausible trajectory correction. 
-      Experimental results show that our method achieves performance comparable to existing chunk-based approaches on the standard EMDB benchmark and highly dynamic custom videos, while uniquely supporting online processing.
+      To address this, we propose OnlineHMR, a fully online framework that jointly satisfies four essential criteria of online processing, including <b>system-level causality</b>, <b>faithfulness</b>, <b>temporal consistency</b>, 
+      and <b>efficiency</b>. Built upon a two-branch architecture, OnlineHMR enables streaming inference via a causal key–value cache design and a curated sliding-window learning strategy. Meanwhile, a human-centric incremental SLAM provides online world-grounded alignment under physically plausible trajectory correction. Experimental results show that our method achieves performance comparable to existing chunk-based approaches on the standard EMDB benchmark and highly dynamic custom videos, while uniquely supporting online processing.
     </p>
   </font>
   </div>
@@ -246,6 +478,20 @@
   </div>
   
   <div class="content">
+    <h2>Faithfulness</h2>
+    <p> Quantitatively, we compare our result with previous and concurrent offline/online methods on camera coordinate benchmark 3DPW and EMDB1, and world coordinate benchmark EMDB2. 
+      Qualitatively, we task our method on custom art and sport videos.
+    </p>
+    <img class="summary-img" src="./files/quan_results.png" style="width:90%; margin-bottom: 2em;">
+    <div class="video-container">
+      <video controls>
+        <source src="./files/result_video.mp4" type="video/mp4">
+      </video>
+    </div>
+    <p class="video-caption">0:00-1:20, custom videos. 1:20-2:58, EMDB2.</p>
+  </div>
+
+  <div class="content">
     <h2>Temporal Consistency</h2>
     <img class="summary-img" src="./files/temporal_consistency.png" style="width:100%;">
     <a>
@@ -254,20 +500,6 @@
       Enforce smooth camera extrinsic switching through physical constraints on the camera. 
       Together, get a more natural world coordinate human.
     </a>
-  </div>
-
-  <div class="content">
-    <h2>Faithfuness</h2>
-    <p> Quantitatively, we compare our result with previous and concurrent offline/online methods on camera coordinate benchmark 3DPW and EMDB1, and world coordinate benchmark EMDB2. 
-      Qualitatively, we task our method on custom art and sport videos.
-    </p>
-    <img class="summary-img" src="./files/quan_results.png" style="width:90%;">
-    <center>
-    <video width="80%" controls>
-      <source src="./files/result_video.mp4" type="video/mp4">
-    </video>
-    </center>
-    <a>0:00-1:20, custom videos. 1:20-2:58, EMDB2.</a>
   </div>
 
   <div class="content">
