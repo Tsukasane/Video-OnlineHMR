@@ -67,6 +67,29 @@
       margin-bottom: 1em;
     }
 
+    #authors {
+      font-size: 1.1em;
+      line-height: 1.8;
+    }
+
+    #authors a {
+      color: #555;
+      text-decoration: none;
+    }
+
+    #authors a:hover {
+      color: #333;
+      text-decoration: none;
+    }
+
+    #authors .corresponding-note {
+      font-size: 0.9em;
+      color: #666;
+      margin-top: -0.2em;
+      display: block;
+      font-style: italic;
+    }
+
     iframe {
       border-radius: 0.5em;
       width: 100%;
@@ -320,7 +343,7 @@
         <a href="https://tsukasane.github.io/">Yiwen Zhao<sup>1</sup></a>
       </span>
       <span>
-        <a href="https://zczcwh.github.io/">Ce Zheng<sup>1</sup></a>
+        <a href="https://zczcwh.github.io/">Ce Zheng<sup>1,†,‡</sup></a>
       </span>
       <span>
         <a href="https://yufu-wang.github.io/">Yufu Wang<sup>2</sup></a>
@@ -333,14 +356,13 @@
         <a href="https://www.linkedin.com/in/liting-wen">Liting Wen<sup>1</sup></a>
       </span>
       <span>
-        <a href="https://laszlojeni.com/index.html#lab">Laszlo A. Jeni<sup>1</sup></a>
+        <a href="https://laszlojeni.com/index.html#lab">László A. Jeni<sup>1,†</sup></a>
       </span>
       <br>
       <span class="institution"><a href="https://www.cmu.edu"><sup>1</sup> Carnegie Mellon University</a>
         <a href="https://www.upenn.edu"><sup>2</sup> University of Pennsylvania</a>
-      <span class="institution"></span>
-      <br>
-    </p>
+      </span>
+      <span class="corresponding-note"><sup>†</sup>Corresponding authors, <sup>‡</sup>Project Lead</span>
     </p>
 
     <img class="summary-img" src="./files/updated_teaser.png" style="width:80%;">
@@ -408,7 +430,7 @@
     <div class="demo-wrapper">
       <!-- Demo Pair 1 -->
       <div class="demo-pair">
-        <video controls>
+        <video controls autoplay muted>
           <source src="./recordings/bb_4.mp4" type="video/mp4">
         </video>
         <iframe
@@ -417,7 +439,7 @@
 
       <!-- Demo Pair 2 -->
       <div class="demo-pair">
-        <video controls>
+        <video controls autoplay muted>
           <source src="./recordings/Demo15_2_output.mp4" type="video/mp4">
         </video>
         <iframe
@@ -426,7 +448,7 @@
 
       <!-- Demo Pair 3 -->
       <div class="demo-pair">
-        <video controls>
+        <video controls autoplay muted>
           <source src="./recordings/Demo3.mp4" type="video/mp4">
         </video>
         <iframe
@@ -435,7 +457,7 @@
 
       <!-- Demo Pair 4 -->
       <div class="demo-pair">
-        <video controls>
+        <video controls autoplay muted>
           <source src="./recordings/Demo8_2_output.mp4" type="video/mp4">
         </video>
         <iframe
@@ -444,7 +466,7 @@
 
       <!-- Demo Pair 5 (Vertical video - horizontal layout) -->
       <div class="demo-pair demo-pair-horizontal">
-        <video controls>
+        <video controls autoplay muted>
           <source src="./recordings/Demo12_1_output.mp4" type="video/mp4">
         </video>
         <iframe
@@ -471,16 +493,16 @@
     <br>
     <a>
       Input: a streaming video. Output: World coordinate streaming SMPL. <br>
-      1) Camera coordinates OnlineHMR estimate the parametric human model in camera space. 
-      2) Human-Centric Incremental SLAM estimates camera extrinsic.
-      3) Metrics depth together with SLAM depth to scale the SLAM outputs to world.
+      1) Camera coordinates OnlineHMR estimates the parametric human model in camera space. <br>
+      2) Human-Centric Incremental SLAM estimates the camera extrinsic. <br>
+      3) Metrics depth together with SLAM depth to scale the SLAM outputs to the world.
     </a>
   </div>
   
   <div class="content">
     <h2>Faithfulness</h2>
-    <p> Quantitatively, we compare our result with previous and concurrent offline/online methods on camera coordinate benchmark 3DPW and EMDB1, and world coordinate benchmark EMDB2. 
-      Qualitatively, we task our method on custom art and sport videos.
+    <p> Quantitatively, we compare our result with previous and concurrent offline/online methods on the camera coordinate benchmark 3DPW and EMDB1, and world coordinate benchmark EMDB2. 
+      Qualitatively, we test our method on custom art and sports videos.
     </p>
     <img class="summary-img" src="./files/quan_results.png" style="width:90%; margin-bottom: 2em;">
     <div class="video-container">
@@ -495,9 +517,9 @@
     <h2>Temporal Consistency</h2>
     <img class="summary-img" src="./files/temporal_consistency.png" style="width:100%;">
     <a>
-      Alleviate camera coordinate human jittering through sliding window learning. 
-      Handling a large proportion of dynamic humans on SLAM by soft masking. 
-      Enforce smooth camera extrinsic switching through physical constraints on the camera. 
+      To alleviate camera coordinates human jittering caused by online adaptation, we curate a sliding window learning pipeline, 
+      integrated with velocity regularization. The large proportion of dynamic humans on SLAM is handled by a soft human mask. 
+      Camera extrinsics are enforced to be smooth through physical constraints. 
       Together, get a more natural world coordinate human.
     </a>
   </div>
@@ -505,12 +527,13 @@
   <div class="content">
     <h2>Efficiency</h2>
     <img class="summary-img" src="./files/effi_results.png" style="width:66%; margin-top: 2px; margin-bottom: 0px;">
-    <a>We report two metrics, frame-per-second (FPS) and average delay time (seconds) per frame (Avg. Delay). Results show that online methods have significantly lower delay compared to offline methods. Although our OnlineHMR has the max Avg. Delay among all online methods, we have a better accuracy in both camera coordinate and world coordinate results. with detailed analysis on our paper.</a>
+    <a>We report two metrics, frame-per-second <i>(FPS)</i> and average delay time (seconds) per frame <i>(Avg. Delay)</i>. Results show that online methods have significantly lower delay compared to offline methods. Although our OnlineHMR has the max <i>Avg. Delay</i> among all online methods, we have a better accuracy in both camera coordinate and world coordinate results, with a detailed analysis in our paper.</a>
   </div>
   
   <div class="content" id="acknowledgements">
     <h2>Acknowledgements</h2>
-      We borrow this template from <a href="https://monst3r-project.github.io/">MonST3R</a>
+      <a>We borrow this template from</a> <a href="https://monst3r-project.github.io/">MonST3R</a>.
+      <a>We thank Shubham Tulsiani and Michael Kaess for their wonderful lectures and insightful feedback, Aniket Agarwal for early-stage brainstorming, Taru Rustagi, Ananya Bal, Joel Julin, Kallol Saha, Hongwen Zhang, Zihan Wang, Jiatong Shi for helpful discussion, Nathalie Chang, Rena Ju for early-stage survey, and the anonymous reviewers for suggestions.</a>
     </p>
   </div>
 </body>
