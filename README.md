@@ -64,6 +64,7 @@
     Register at [SMPLify](https://smplify.is.tue.mpg.de) and [SMPL](https://smpl.is.tue.mpg.de), whose usernames and passwords will be used by our script to download the SMPL models. Run the following to fetch all models and checkpoints to `data/`. Thirdparty models include [MASt3r-SLAM checkpoints](https://github.com/rmurai0610/MASt3R-SLAM/tree/c3d0d5b67bf51d558d7640ff6032407f68041f92?tab=readme-ov-file#installation), [HMR2.0b checkpoints](https://github.com/shubham-goel/4D-Humans), [MoGe-v2 checkpoints](https://github.com/microsoft/moge).
     ```Bash
     bash scripts/download_models.sh
+    bash scripts/download_extra.sh
     ```
 
 4. Check repo structure
@@ -81,9 +82,7 @@
         ├── DEVA-propagation.pth
         ├── mogev2_model.pt
         ├── sam_vit_h_4b8939.pth
-        └── vimo_checkpoint.pth.tar
     └── smpl/
-        ├── downsample_mat.pkl
         ├── J_regressor_extra.npy
         ├── J_regressor_h36m.npy
         ├── kintree_table.pkl

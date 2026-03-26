@@ -222,14 +222,12 @@ class Evaluator:
         self.J24_TO_J14 = constants.J24_TO_J14
         self.H36M_TO_J17 = constants.H36M_TO_J17
         self.H36M_TO_J14 = constants.H36M_TO_J14
-        self.V6890_TO_V138_mat = pickle.load(open(constants.DOWNSAMPLE_MAT, 'rb')).to_dense()
         self.all_acc = []
 
         self.chunk_size = 16
         self.batch_t = 8
 
         self.visualize_spec = False
-        self.visualize_verticesspec = False # false in emdb_1, true in 3dpw_test_vid
 
 
     def __call__(self, gt_keypoints_3d, pred_keypoints_3d, dataset='3dpw', 
@@ -242,8 +240,6 @@ class Evaluator:
             - gt_verts: bs * 3, 6890, 3
             - pred_verts: bs * 3, 6890, 3
         '''
-        # batch_size = gt_keypoints_3d.shape[0] # 128, 24, 4
-
         gt_keypoints_3d = gt_keypoints_3d[:, :, :3].detach()
         pred_keypoints_3d = pred_keypoints_3d[:, :, :3].detach()
         num_j = gt_keypoints_3d.shape[1]
@@ -255,32 +251,18 @@ class Evaluator:
         batch_t = self.batch_t
         gt_valid = select_valid(gt_valid, batch_t)
 
-        # NOTE(yiwen) fps=30
-        if self.visualize_verticesspec: # one time for each validation pass
-            self.V6890_TO_V138_mat = self.V6890_TO_V138_mat.to(gt_valid.device)
-            # # gt_valid: B, 6890, 3
-            gt_v138 = torch.matmul(self.V6890_TO_V138_mat, gt_verts) # 16, 6890, 3-->16, 138, 3
-            pred_v138 = torch.matmul(self.V6890_TO_V138_mat, pred_verts)
-            gt_amplitude = plot_spectrogram(gt_v138, sr=138*30, save_name="vis_138verticesGT3.png") # NOTE(yiwen) decide the sr
-            pred_amplitude = plot_spectrogram(pred_v138, sr=138*30, save_name="vis_138verticesPred3.png")
-
-            plot_amplitude(gt_amplitude-pred_amplitude, save_name="gt-predvertices3.png")
-            cal_spectrogram_similarity(gt_amplitude, pred_amplitude)
-            self.visualize_verticesspec = False
 
         # NOTE(yiwen) fps=30
         if self.visualize_spec: # one time for each validation pass
-            # gtnoise_amplitude = plot_spectrogram(add_noise_to_seq(gt_valid), sr=30*24, save_name="vis_GTnoised.png")
 
             # gt_valid: B, 24, 3
             gt_amplitude = plot_spectrogram(gt_valid, sr=30*24, save_name="vis_GT.png")
             pred_amplitude = plot_spectrogram(pred_valid, sr=30*24, save_name="vis_Pred.png")
 
             plot_amplitude(gt_amplitude-pred_amplitude, save_name="gt-pred.png")
-            # plot_amplitude(gt_amplitude-gtnoise_amplitude, save_name="gt-noise.png")
 
             cal_spectrogram_similarity(gt_amplitude, pred_amplitude)
-            # cal_spectrogram_similarity(gtnoise_amplitude, pred_amplitude)
+
             self.visualize_spec = False
 
         batch_size = gt_valid.shape[0]
@@ -325,8 +307,6 @@ class Evaluator:
             self.jitter_gt[self.counter:self.counter+batch_size] = jitter_gt
             
             # Frequency domain metrics (for all sequences in the batch)
-            # Use original coordinates without pelvis alignment (consistent with GVHMR)
-            # Note: GVHMR computes frequency metrics on raw camera coordinates without pelvis alignment
             gt_keypoints_3d_freq = select_valid(gt_keypoints_3d_orig, batch_t)
             pred_keypoints_3d_freq = pred_keypoints_3d_orig
             gt_freq = gt_keypoints_3d_freq.reshape(batch_t, -1, num_j, 3).cpu()
